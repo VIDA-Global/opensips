@@ -2,7 +2,7 @@
 
 name: Unit Tests
 
-# Controls when the action will run. 
+# Controls when the action will run.
 on:
   # Triggers the workflow on push or pull request events touching source
   push:
@@ -146,6 +146,13 @@ jobs:
         env:
           MAKE_TGT: 'test'
         run: script -e unit_tests.log -c 'sh -x scripts/build/do_build.sh DEFS_EXTRA_OPTS="-DUNIT_TESTS -fPIE -fPIC"'
+
+      - name: Run all module unit tests
+        run: |
+          for module in acc cfgutils registrar; do
+            MAKE_TGT=test sh -x scripts/build/do_build.sh \
+              DEFS_EXTRA_OPTS="-DUNIT_TESTS -fPIE -fPIC" module="$module"
+          done
 
       - name: Collect test logs
         uses: actions/upload-artifact@v7

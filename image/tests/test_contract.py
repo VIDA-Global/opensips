@@ -30,6 +30,13 @@ class ImageContractTests(unittest.TestCase):
         self.assertIn(commit, variables)
         self.assertIn(commit, fetch)
 
+    def test_source_gate_runs_every_maintained_unit_suite(self) -> None:
+        runner = (IMAGE_ROOT / "scripts/run-source-tests.sh").read_text(encoding="utf-8")
+        for module in ("core", "acc", "cfgutils", "registrar"):
+            self.assertIn(module, runner)
+        for fuzzer in ("fuzz_msg_parser", "fuzz_uri_parser", "fuzz_csv_parser", "fuzz_core_funcs"):
+            self.assertIn(fuzzer, runner)
+
     def test_iam_templates_render_as_json(self) -> None:
         replacements = {
             "${AWS_ACCOUNT_ID}": "123456789012",

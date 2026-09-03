@@ -32,6 +32,16 @@ make -C image test
 make -C image inspect
 ```
 
+The maintained OpenSIPS source gates run on Linux after dependencies are installed:
+
+```bash
+make -C image source-test MODE=build
+make -C image source-test MODE=unit
+make -C image source-test MODE=fuzz
+```
+
+`MODE=unit` runs every declared TAP suite: core, `acc`, `cfgutils`, and `registrar`. `MODE=fuzz` builds and executes all four standalone fuzz targets. The upstream `system_tests` target is not included because OpenSIPS 3.6.8 ships no `test/Makefile`; the Python 2 `dbtextdb_test.py` suite is also legacy and unsupported on Ubuntu 24.04.
+
 These commands create, mutate, or delete AWS resources and require explicit operational approval:
 
 ```bash

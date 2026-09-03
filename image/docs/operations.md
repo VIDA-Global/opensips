@@ -65,6 +65,8 @@ make -C image lint
 make -C image source
 ```
 
+CI additionally runs a normal source build, every declared TAP suite, and all standalone fuzz targets before any AWS-authenticated job. A failing source gate prevents Packer from receiving AWS credentials.
+
 After change approval, a local build uses:
 
 ```bash

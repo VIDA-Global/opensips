@@ -21,6 +21,33 @@ env:
   OPENSIPS_VERSION: 3.6.8
 
 jobs:
+  source-quality:
+    name: OpenSIPS source ${{ matrix.mode }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    container:
+      image: ghcr.io/opensips/ubuntu-ci:24.04@sha256:7cc53d243536b92db0a31ab073a179d823d8ab30034a835d652086213e5e1e96
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [build, unit, fuzz]
+    steps:
+      - name: Check out source and pinned submodules
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Install source dependencies
+        env:
+          BUILD_OS: ubuntu:24.04
+          COMPILER: ${{ matrix.mode == 'fuzz' && 'clang' || 'gcc' }}
+        run: sh -x scripts/build/install_depends.sh
+      - name: Run maintained source gate
+        env:
+          BUILD_OS: ubuntu:24.04
+          COMPILER: ${{ matrix.mode == 'fuzz' && 'clang' || 'gcc' }}
+        run: image/scripts/run-source-tests.sh "${{ matrix.mode }}"
+
   static:
     name: AWS-free validation
     if: github.ref == vars.AMI_TRUSTED_REF
@@ -40,7 +67,7 @@ jobs:
 
   build:
     name: Build source-region AMI
-    needs: static
+    needs: [source-quality, static]
     runs-on: [self-hosted, linux, ARM64, opensips-ami]
     timeout-minutes: 90
     permissions:
