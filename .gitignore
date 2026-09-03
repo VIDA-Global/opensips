@@ -1,0 +1,42 @@
+*.o
+*.d
+*.so
+*.a
+*.sw?
+tags
+cscope*
+
+# /
+/cfg.tab.c
+/cfg.tab.h
+/lex.yy.c
+/opensips
+/debian
+/image/build/
+/image/packer/*.pkrvars.hcl
+!/image/packer/*.pkrvars.hcl.example
+/curses.out
+/.svnrevision
+/.gitrevision
+
+# /docs/
+/docs/database
+
+# /menuconfig/
+/menuconfig/configure
+/Makefile.conf
+/mem/mem_stats.c
+/mem/mem_stats.h
+
+# /modules/
+modules/tls_wolfssl/lib
+
+# miscellaneous files
+core
+core.*
+out
+log
+*.log
+*.html
+__pycache__/
+*.py[cod]

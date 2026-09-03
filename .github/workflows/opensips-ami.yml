@@ -1,0 +1,216 @@
+name: OpenSIPS ARM64 AMI
+
+on:
+  workflow_dispatch:
+    inputs:
+      promote:
+        description: Promote the validated AMI to configured destination regions
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opensips-ami-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AMI_BUILD_REGION || 'us-east-2' }}
+  OPENSIPS_VERSION: 3.6.8
+
+jobs:
+  static:
+    name: AWS-free validation
+    if: github.ref == vars.AMI_TRUSTED_REF
+    runs-on: [self-hosted, linux, ARM64, opensips-ami]
+    timeout-minutes: 20
+    steps:
+      - name: Check out the requested source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+      - name: Validate image project
+        run: make -C image validate
+      - name: Lint image project
+        run: make -C image lint
+      - name: Verify pinned OpenSIPS source
+        run: make -C image source
+
+  build:
+    name: Build source-region AMI
+    needs: static
+    runs-on: [self-hosted, linux, ARM64, opensips-ami]
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      ami-id: ${{ steps.identity.outputs.ami_id }}
+      build-id: ${{ steps.identity.outputs.build_id }}
+    steps:
+      - name: Check out the requested source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+      - name: Assume the AMI builder role
+        uses: aws-actions/configure-aws-credentials@00943011d9042930efac3dcd3a170e4273319bc8
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AMI_BUILDER_ROLE_ARN }}
+          role-session-name: opensips-ami-build-${{ github.run_id }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+      - name: Render non-secret Packer variables
+        env:
+          BUILD_INSTANCE_PROFILE: ${{ vars.AMI_BUILD_INSTANCE_PROFILE }}
+          KMS_KEY_ID: ${{ vars.AMI_BUILD_KMS_KEY_ID }}
+          SECURITY_GROUP_IDS: ${{ vars.AMI_BUILD_SECURITY_GROUP_IDS_JSON }}
+          SUBNET_ID: ${{ vars.AMI_BUILD_SUBNET_ID }}
+          VPC_ID: ${{ vars.AMI_BUILD_VPC_ID }}
+        run: |
+          set -euo pipefail
+          jq -e 'type == "array" and length > 0 and all(.[]; type == "string")' <<<"$SECURITY_GROUP_IDS"
+          {
+            printf 'aws_region = %s\n' "$(jq -Rn --arg value "$AWS_REGION" '$value')"
+            printf 'instance_type = "m9g.large"\n'
+            printf 'vpc_id = %s\n' "$(jq -Rn --arg value "$VPC_ID" '$value')"
+            printf 'subnet_id = %s\n' "$(jq -Rn --arg value "$SUBNET_ID" '$value')"
+            printf 'security_group_ids = %s\n' "$(jq -c . <<<"$SECURITY_GROUP_IDS")"
+            printf 'build_instance_profile = %s\n' "$(jq -Rn --arg value "$BUILD_INSTANCE_PROFILE" '$value')"
+            printf 'kms_key_id = %s\n' "$(jq -Rn --arg value "$KMS_KEY_ID" '$value')"
+            printf 'build_id = %s\n' "$(jq -Rn --arg value "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" '$value')"
+            printf 'additional_tags = { GitCommit = %s, GitHubRepository = %s, GitHubRun = %s }\n' \
+              "$(jq -Rn --arg value "$GITHUB_SHA" '$value')" \
+              "$(jq -Rn --arg value "$GITHUB_REPOSITORY" '$value')" \
+              "$(jq -Rn --arg value "$GITHUB_RUN_ID" '$value')"
+          } > image/packer/ci.pkrvars.hcl
+      - name: Initialize Packer
+        run: make -C image init
+      - name: Build immutable ARM64 AMI
+        run: make -C image build VARS_FILE=packer/ci.pkrvars.hcl
+      - name: Record AMI identity
+        id: identity
+        run: |
+          set -euo pipefail
+          artifact_id=$(jq -er '.builds[-1].artifact_id' image/build/packer-manifest.json)
+          ami_id=${artifact_id#*:}
+          [[ $ami_id =~ ^ami-[0-9a-f]+$ ]]
+          build_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          jq -n \
+            --arg source_region "$AWS_REGION" \
+            --arg source_ami_id "$ami_id" \
+            --arg expected_account_id "${{ vars.AWS_ACCOUNT_ID }}" \
+            --arg build_id "$build_id" \
+            '{source_region:$source_region,source_ami_id:$source_ami_id,expected_account_id:$expected_account_id,build_id:$build_id}' \
+            > image/build/source-ami.json
+          printf 'ami_id=%s\nbuild_id=%s\n' "$ami_id" "$build_id" >>"$GITHUB_OUTPUT"
+      - name: Upload source-region manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: opensips-source-ami-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            image/build/packer-manifest.json
+            image/build/source-ami.json
+          if-no-files-found: error
+          retention-days: 30
+
+  validate:
+    name: Launch and validate AMI
+    needs: build
+    runs-on: [self-hosted, linux, ARM64, opensips-ami]
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the requested source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+      - name: Assume the AMI validation role
+        uses: aws-actions/configure-aws-credentials@00943011d9042930efac3dcd3a170e4273319bc8
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AMI_VALIDATOR_ROLE_ARN }}
+          role-session-name: opensips-ami-validate-${{ github.run_id }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+      - name: Validate launch, boot, configuration, and reboot
+        env:
+          AMI_ID: ${{ needs.build.outputs.ami-id }}
+          SUBNET_ID: ${{ vars.AMI_VALIDATION_SUBNET_ID }}
+          SECURITY_GROUP_ID: ${{ vars.AMI_VALIDATION_SECURITY_GROUP_ID }}
+          VALIDATION_INSTANCE_PROFILE: ${{ vars.AMI_VALIDATION_INSTANCE_PROFILE }}
+          TEST_CONFIG_SECRET_ARN: ${{ vars.AMI_TEST_CONFIG_SECRET_ARN }}
+          TEST_CONFIG_SECRET_VERSION_ID: ${{ vars.AMI_TEST_CONFIG_SECRET_VERSION_ID }}
+          POST_VALIDATION_SCRIPT: ${{ vars.AMI_POST_VALIDATION_SCRIPT }}
+        run: image/scripts/validate-ami.sh
+      - name: Create approved promotion input
+        if: inputs.promote
+        env:
+          DESTINATIONS: ${{ vars.AMI_DESTINATIONS_JSON }}
+          SOURCE_AMI_ID: ${{ needs.build.outputs.ami-id }}
+          BUILD_ID: ${{ needs.build.outputs.build-id }}
+        run: |
+          set -euo pipefail
+          jq -e 'type == "object" and length > 0 and all(to_entries[]; .value | type == "string")' <<<"$DESTINATIONS"
+          mkdir -p image/build
+          jq -n \
+            --arg source_region "$AWS_REGION" \
+            --arg source_ami_id "$SOURCE_AMI_ID" \
+            --arg expected_account_id "${{ vars.AWS_ACCOUNT_ID }}" \
+            --arg build_id "$BUILD_ID" \
+            --argjson destinations "$DESTINATIONS" \
+            '{
+              source_region: $source_region,
+              source_ami_id: $source_ami_id,
+              expected_account_id: $expected_account_id,
+              build_id: $build_id,
+              destinations: $destinations
+            }' \
+            > image/build/promotion.json
+      - name: Upload validated promotion input
+        if: inputs.promote
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: opensips-promotion-${{ github.run_id }}-${{ github.run_attempt }}
+          path: image/build/promotion.json
+          if-no-files-found: error
+          retention-days: 30
+
+  promote:
+    name: Approve and promote AMI
+    if: inputs.promote
+    needs: [build, validate]
+    environment: opensips-ami-production
+    runs-on: [self-hosted, linux, ARM64, opensips-ami]
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the requested source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+      - name: Download validated promotion input
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+        with:
+          name: opensips-promotion-${{ github.run_id }}-${{ github.run_attempt }}
+          path: image/build
+      - name: Assume the AMI promotion role
+        uses: aws-actions/configure-aws-credentials@00943011d9042930efac3dcd3a170e4273319bc8
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AMI_PROMOTION_ROLE_ARN }}
+          role-session-name: opensips-ami-promote-${{ github.run_id }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+      - name: Copy and verify encrypted regional AMIs
+        run: make -C image promote MANIFEST=build/promotion.json
+      - name: Upload regional AMI manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: opensips-promoted-amis-${{ github.run_id }}-${{ github.run_attempt }}
+          path: image/build/promoted-amis.json
+          if-no-files-found: error
+          retention-days: 90

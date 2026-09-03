@@ -1,0 +1,22 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadOpenSipsConfiguration",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "${OPENSIPS_CONFIG_SECRET_ARN}"
+    },
+    {
+      "Sid": "DecryptOpenSipsConfiguration",
+      "Effect": "Allow",
+      "Action": "kms:Decrypt",
+      "Resource": "${SECRETS_KMS_KEY_ARN}",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "secretsmanager.${AWS_REGION}.amazonaws.com"
+        }
+      }
+    }
+  ]
+}

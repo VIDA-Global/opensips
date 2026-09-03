@@ -1,0 +1,106 @@
+# This is a basic workflow to help you get started with Actions
+
+name: Main CI
+
+# Controls when the action will run.
+on:
+  # Triggers the workflow on push or pull request events touching source
+  push:
+    paths:
+      - '**/Makefile*'
+      - '**/*.c'
+      - '**/*.cpp'
+      - '**/*.h'
+      - 'cfg.y'
+      - 'cfg.lex'
+      - 'scripts/**'
+  pull_request:
+    paths:
+      - '**/Makefile*'
+      - '**/*.c'
+      - '**/*.cpp'
+      - '**/*.h'
+      - 'cfg.y'
+      - 'cfg.lex'
+      - 'scripts/**'
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  build:
+    # The type of runner that the job will run on
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/opensips/ubuntu-ci:${{ matrix.os }}
+    env:
+      COMPILER: ${{ matrix.compiler }}
+      BUILD_OS: ubuntu:${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [20.04, 22.04, 24.04, 26.04]
+        compiler: ['gcc', 'clang']
+        include:
+          - os: 20.04
+            compiler: 'gcc-9'
+          - os: 20.04
+            compiler: 'gcc-10'
+          - os: 20.04
+            compiler: 'clang-9'
+          - os: 20.04
+            compiler: 'clang-10'
+          - os: 22.04
+            compiler: 'gcc-11'
+          - os: 22.04
+            compiler: 'gcc-12'
+          - os: 22.04
+            compiler: 'clang-11'
+          - os: 22.04
+            compiler: 'clang-12'
+          - os: 22.04
+            compiler: 'clang-13'
+          - os: 22.04
+            compiler: 'clang-14'
+          - os: 22.04
+            compiler: 'clang-15'
+          - os: 24.04
+            compiler: 'clang-16'
+          - os: 24.04
+            compiler: 'clang-17'
+          - os: 24.04
+            compiler: 'clang-18'
+          - os: 26.04
+            compiler: 'gcc-14'
+          - os: 26.04
+            compiler: 'clang-18'
+          - os: 26.04
+            compiler: 'clang-19'
+          - os: 26.04
+            compiler: 'clang-20'
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: sh -x scripts/build/install_depends.sh
+
+      - name: Build
+        run: sh -x scripts/build/do_build.sh
+
+  all_done:
+    needs: build
+    uses: ./.github/workflows/.notify.yml
+    with:
+      job_name: "Main CI"
+      job_result: ${{ needs.build.result }}
+    secrets:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+    if: ${{ always() }}

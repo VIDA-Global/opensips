@@ -1,0 +1,217 @@
+---
+- name: Assert the supported image architecture and distribution
+  ansible.builtin.assert:
+    that:
+      - ansible_architecture == 'aarch64'
+      - ansible_distribution == 'Ubuntu'
+      - ansible_distribution_version is version('24.04', '==')
+    fail_msg: This image must be built natively on Ubuntu 24.04 ARM64.
+
+- name: Validate immutable source inputs
+  ansible.builtin.assert:
+    that:
+      - opensips_ami_version is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+      - opensips_ami_source_commit is match('^[0-9a-f]{40}$')
+      - opensips_ami_source_sha256 is match('^[0-9a-f]{64}$')
+      - opensips_ami_modules | length > 0
+      - opensips_ami_modules | unique | length == opensips_ami_modules | length
+    fail_msg: OpenSIPS source identity or module allowlist is invalid.
+
+- name: Wait for cloud-init before changing packages
+  ansible.builtin.command: cloud-init status --wait
+  changed_when: false
+
+- name: Update the apt package index
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install build and runtime packages
+  ansible.builtin.apt:
+    name: "{{ opensips_ami_build_packages + opensips_ami_runtime_packages }}"
+    state: present
+    install_recommends: false
+
+- name: Verify the uploaded source archive
+  ansible.builtin.stat:
+    path: "{{ opensips_ami_source_archive }}"
+    checksum_algorithm: sha256
+  register: opensips_ami_archive
+
+- name: Reject an unverified source archive
+  ansible.builtin.assert:
+    that:
+      - opensips_ami_archive.stat.isreg | default(false)
+      - opensips_ami_archive.stat.checksum == opensips_ami_source_sha256
+    fail_msg: The uploaded OpenSIPS source archive failed SHA-256 verification.
+
+- name: Recreate the source directory
+  ansible.builtin.file:
+    path: "{{ opensips_ami_source_directory }}"
+    state: absent
+
+- name: Create the source directory
+  ansible.builtin.file:
+    path: "{{ opensips_ami_source_directory }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Extract the verified source archive
+  ansible.builtin.unarchive:
+    src: "{{ opensips_ami_source_archive }}"
+    dest: "{{ opensips_ami_source_directory }}"
+    remote_src: true
+    extra_opts:
+      - --strip-components=1
+
+- name: Verify every requested module exists
+  ansible.builtin.stat:
+    path: "{{ opensips_ami_source_directory }}/modules/{{ item }}"
+  loop: "{{ opensips_ami_modules }}"
+  register: opensips_ami_requested_module_paths
+
+- name: Reject unavailable modules
+  ansible.builtin.assert:
+    that:
+      - item.stat.isdir | default(false)
+    fail_msg: "Requested OpenSIPS module does not exist: {{ item.item }}"
+  loop: "{{ opensips_ami_requested_module_paths.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Build and install the exact OpenSIPS module set
+  ansible.builtin.shell: |
+    set -euo pipefail
+    mapfile -t all_modules < <(find modules -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | LC_ALL=C sort)
+    read -r -a selected_modules <<<"$OPENSIPS_MODULES"
+    printf '%s\n' "${selected_modules[@]}" | LC_ALL=C sort -u > /tmp/opensips-selected-modules
+    printf '%s\n' "${all_modules[@]}" | LC_ALL=C sort -u > /tmp/opensips-all-modules
+    excluded_modules=$(comm -23 /tmp/opensips-all-modules /tmp/opensips-selected-modules | tr '\n' ' ')
+    make Makefile.conf
+    make -j"$(nproc)" \
+      CC_EXTRA_OPTS='-Werror -fstack-protector-strong' \
+      exclude_modules="$excluded_modules" all
+    make \
+      PREFIX=/ \
+      bin_dir=usr/sbin \
+      LIBDIR=usr/lib/aarch64-linux-gnu \
+      exclude_modules="$excluded_modules" install
+  args:
+    chdir: "{{ opensips_ami_source_directory }}"
+    executable: /bin/bash
+  environment:
+    LC_ALL: C
+    OPENSIPS_MODULES: "{{ opensips_ami_modules | join(' ') }}"
+  changed_when: true
+
+- name: Remove upstream sample configuration and TLS keys
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/opensips
+    - /share
+
+- name: Create service accounts and runtime directories
+  ansible.builtin.include_tasks: runtime.yml
+
+- name: Verify no private-key material remains in the OpenSIPS configuration directory
+  ansible.builtin.find:
+    paths: /etc/opensips
+    patterns:
+      - '*.key'
+      - '*private*'
+    file_type: file
+    recurse: true
+  register: opensips_ami_private_key_files
+
+- name: Reject private-key material in the image
+  ansible.builtin.assert:
+    that:
+      - opensips_ami_private_key_files.matched == 0
+    fail_msg: The AMI contains unexpected private-key material.
+
+- name: Validate the installed binary architecture
+  ansible.builtin.command: file /usr/sbin/opensips
+  register: opensips_ami_binary_file
+  changed_when: false
+  failed_when: "'ARM aarch64' not in opensips_ami_binary_file.stdout"
+
+- name: Record the installed OpenSIPS version
+  ansible.builtin.command: /usr/sbin/opensips -V
+  register: opensips_ami_version_output
+  changed_when: false
+  failed_when: opensips_ami_version not in (opensips_ami_version_output.stdout + opensips_ami_version_output.stderr)
+
+- name: Discover installed dynamic modules
+  ansible.builtin.find:
+    paths: "{{ opensips_ami_module_directory }}"
+    patterns: '*.so'
+    file_type: file
+    recurse: false
+  register: opensips_ami_installed_module_files
+
+- name: Verify the exact installed dynamic module inventory
+  ansible.builtin.assert:
+    that:
+      - opensips_ami_installed_module_names == (opensips_ami_modules | sort)
+    fail_msg: "Installed modules differ from the allowlist: {{ opensips_ami_installed_module_names }}"
+  vars:
+    opensips_ami_installed_module_names: >-
+      {{ opensips_ami_installed_module_files.files
+         | map(attribute='path') | map('basename')
+         | map('regex_replace', '\\.so$', '') | sort }}
+
+- name: Create the image manifest directory
+  ansible.builtin.file:
+    path: /usr/share/opensips-ami
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install source provenance
+  ansible.builtin.template:
+    src: source-manifest.json.j2
+    dest: /usr/share/opensips-ami/source-manifest.json
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Install the module inventory
+  ansible.builtin.copy:
+    content: "{{ (opensips_ami_modules | sort | join('\n')) + '\n' }}"
+    dest: /usr/share/opensips-ami/modules.txt
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Remove source and build-only packages
+  ansible.builtin.apt:
+    name: "{{ opensips_ami_build_packages }}"
+    state: absent
+    purge: true
+    autoremove: true
+
+- name: Remove build inputs and package caches
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ opensips_ami_source_directory }}"
+    - "{{ opensips_ami_source_archive }}"
+    - /tmp/opensips-selected-modules
+    - /tmp/opensips-all-modules
+    - /var/lib/apt/lists
+
+- name: Reset machine-specific image state
+  ansible.builtin.shell: |
+    set -euo pipefail
+    cloud-init clean --logs --machine-id
+    rm -f /etc/ssh/ssh_host_*
+    truncate -s 0 /var/log/lastlog /var/log/wtmp /var/log/btmp || true
+  args:
+    executable: /bin/bash
+  changed_when: true

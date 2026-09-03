@@ -1,0 +1,48 @@
+---
+opensips_ami_version: '3.6.8'
+opensips_ami_source_commit: f9f85260e5def73e3f854f5e22d148d2d977e85f
+opensips_ami_source_sha256: b3e1ab4d82dce763bbd51c99a1733f133465fda8fe2591f86aec9c3eefababf0
+opensips_ami_source_archive: /tmp/opensips-source.tar.gz
+opensips_ami_source_directory: /usr/local/src/opensips
+opensips_ami_module_directory: /usr/lib/aarch64-linux-gnu/opensips/modules
+opensips_ami_modules:
+  - b2b_entities
+  - b2b_logic
+  - clusterer
+  - db_postgres
+  - dialog
+  - maxfwd
+  - proto_bin
+  - proto_hep
+  - proto_tls
+  - rr
+  - rtpengine
+  - sipmsgops
+  - sl
+  - textops
+  - tls_mgm
+  - tls_openssl
+  - tm
+  - topology_hiding
+  - tracer
+opensips_ami_build_packages:
+  - bison
+  - build-essential
+  - flex
+  - libjson-c-dev
+  - libncurses-dev
+  - libpcre2-dev
+  - libpq-dev
+  - libssl-dev
+  - libxml2-dev
+  - pkg-config
+opensips_ami_runtime_packages:
+  - ca-certificates
+  - libjson-c5
+  - libpcre2-8-0
+  - libpq5
+  - libssl3t64
+  - libxml2
+  - python3
+  - python3-boto3
+  - tini

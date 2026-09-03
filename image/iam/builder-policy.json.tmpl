@@ -1,0 +1,129 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadEC2Inventory",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeImages",
+        "ec2:DescribeInstances",
+        "ec2:DescribeInstanceStatus",
+        "ec2:DescribeRegions",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSnapshots",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeVolumes",
+        "ec2:DescribeVpcs"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "BuildTaggedImage",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:AttachVolume",
+        "ec2:CreateImage",
+        "ec2:CreateKeyPair",
+        "ec2:CreateSnapshot",
+        "ec2:CreateTags",
+        "ec2:CreateVolume",
+        "ec2:DeleteKeyPair",
+        "ec2:DeleteSnapshot",
+        "ec2:DeleteVolume",
+        "ec2:DeregisterImage",
+        "ec2:DetachVolume",
+        "ec2:ModifyImageAttribute",
+        "ec2:ModifyInstanceAttribute",
+        "ec2:ModifySnapshotAttribute",
+        "ec2:RegisterImage",
+        "ec2:RunInstances",
+        "ec2:StopInstances",
+        "ec2:TerminateInstances"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEqualsIfExists": {
+          "aws:RequestTag/Application": "opensips",
+          "aws:RequestTag/ManagedBy": "packer"
+        }
+      }
+    },
+    {
+      "Sid": "DenyUntaggedInstanceCreation",
+      "Effect": "Deny",
+      "Action": "ec2:RunInstances",
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:RequestTag/ManagedBy": "packer"
+        }
+      }
+    },
+    {
+      "Sid": "DenyDestructiveAccessToUnmanagedResources",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:AttachVolume",
+        "ec2:DeleteSnapshot",
+        "ec2:DeleteVolume",
+        "ec2:DeregisterImage",
+        "ec2:DetachVolume",
+        "ec2:ModifyImageAttribute",
+        "ec2:ModifyInstanceAttribute",
+        "ec2:ModifySnapshotAttribute",
+        "ec2:StopInstances",
+        "ec2:TerminateInstances"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "ec2:ResourceTag/ManagedBy": "packer"
+        }
+      }
+    },
+    {
+      "Sid": "DenyUnrelatedKeyPairDeletion",
+      "Effect": "Deny",
+      "Action": "ec2:DeleteKeyPair",
+      "NotResource": [
+        "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:key-pair/packer_*",
+        "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:key-pair/opensips-ami-*"
+      ]
+    },
+    {
+      "Sid": "UseBuildKmsKey",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Decrypt",
+        "kms:DescribeKey",
+        "kms:Encrypt",
+        "kms:GenerateDataKeyWithoutPlaintext",
+        "kms:ReEncryptFrom",
+        "kms:ReEncryptTo"
+      ],
+      "Resource": "${BUILD_KMS_KEY_ARN}"
+    },
+    {
+      "Sid": "CreateBuildKmsGrant",
+      "Effect": "Allow",
+      "Action": "kms:CreateGrant",
+      "Resource": "${BUILD_KMS_KEY_ARN}",
+      "Condition": {
+        "Bool": {
+          "kms:GrantIsForAWSResource": "true"
+        }
+      }
+    },
+    {
+      "Sid": "PassOnlyBuildProfile",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "${BUILD_INSTANCE_ROLE_ARN}",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ec2.amazonaws.com"
+        }
+      }
+    }
+  ]
+}

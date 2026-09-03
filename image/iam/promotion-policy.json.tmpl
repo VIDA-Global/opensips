@@ -1,0 +1,40 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "InspectAndCopyImages",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CopyImage",
+        "ec2:CreateTags",
+        "ec2:DescribeImages",
+        "ec2:DescribeSnapshots"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "UseRegionalPromotionKeys",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Decrypt",
+        "kms:DescribeKey",
+        "kms:Encrypt",
+        "kms:GenerateDataKeyWithoutPlaintext",
+        "kms:ReEncryptFrom",
+        "kms:ReEncryptTo"
+      ],
+      "Resource": ${ALL_PROMOTION_KMS_KEY_ARNS_JSON}
+    },
+    {
+      "Sid": "CreateRegionalPromotionGrants",
+      "Effect": "Allow",
+      "Action": "kms:CreateGrant",
+      "Resource": ${ALL_PROMOTION_KMS_KEY_ARNS_JSON},
+      "Condition": {
+        "Bool": {
+          "kms:GrantIsForAWSResource": "true"
+        }
+      }
+    }
+  ]
+}

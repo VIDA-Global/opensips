@@ -1,0 +1,137 @@
+setup_qemu() {
+	ARCH1="${1}"
+	ARCH2="${2}"
+	${SUDO} mkdir "/usr/${ARCH1}-linux-${ARCH2}/etc"
+	${SUDO} touch "/usr/${ARCH1}-linux-${ARCH2}/etc/ld.so.cache"
+	${SUDO} mkdir "/etc/qemu-binfmt"
+	${SUDO} ln -sf "/usr/${ARCH1}-linux-${ARCH2}" "/etc/qemu-binfmt/${ARCH1}"
+}
+
+exclude_pkgs() {
+	local _PKGS=""
+	for pkg in ${PKGS}
+	do
+		if echo "${pkg}" | grep -q -w "${1}"
+		then
+			continue
+		fi
+		_PKGS="${_PKGS} ${pkg}"
+	done
+	echo "${_PKGS}"
+}
+
+COMPILER_VER=`echo "${COMPILER}" | sed -e 's|[a-z]*-||'`
+
+if [ "`id -u`" -ne 0 ]
+then
+	SUDO="sudo"
+fi
+
+case "${COMPILER}" in
+gcc)
+	export CC="${COMPILER}"
+	PKGS="${PKGS} gcc g++"
+	;;
+gcc-i386-cross)
+	export CC="gcc"
+	CC_EXTRA_OPTS="-Werror -m32"
+	MAKE_TGT="opensips"
+	DOCKR_PLATFORM="x86_64"
+	export BUILD_OS="ubuntu:18.04"
+	PRE_INSTALL_CMD="${SUDO} dpkg --add-architecture i386"
+	PKGS="`exclude_pkgs 2.3.7` gcc g++ libc6-dev:i386 libstdc++6:i386 lib32gcc-7-dev"
+	;;
+gcc-mips64-cross)
+	MAKE_TGT="opensips"
+	DOCKR_PLATFORM="x86_64"
+	export BUILD_OS="ubuntu:18.04"
+	export CC="mips64-linux-gnuabi64-gcc"
+	export AR="mips64-linux-gnuabi64-ar"
+	export RANLIB="mips64-linux-gnuabi64-ranlib"
+	POST_INSTALL_CMD="setup_qemu mips64 gnuabi64"
+	PKGS="`exclude_pkgs 2.3.7` gcc-mips64-linux-gnuabi64 libc-dev-mips64-cross qemu-user-static"
+	;;
+gcc-arm32-cross)
+	MAKE_TGT="opensips"
+	export CC="arm-linux-gnueabihf-gcc"
+	export AR="arm-linux-gnueabihf-ar"
+	export RANLIB="arm-linux-gnueabihf-ranlib"
+	POST_INSTALL_CMD="setup_qemu arm gnueabihf"
+	export BUILD_OS="ubuntu:18.04"
+	DOCKR_PLATFORM="x86_64"
+	PKGS="`exclude_pkgs 2.3.7` gcc-arm-linux-gnueabihf libc-dev-armhf-cross qemu-user-static"
+	;;
+gcc-arm64-cross)
+	MAKE_TGT="opensips"
+	export CC="aarch64-linux-gnu-gcc"
+	export AR="aarch64-linux-gnu-ar"
+	export RANLIB="aarch64-linux-gnu-ranlib"
+	POST_INSTALL_CMD="setup_qemu aarch64 gnu"
+	export BUILD_OS="ubuntu:18.04"
+	DOCKR_PLATFORM="x86_64"
+	PKGS="`exclude_pkgs 2.3.7` gcc-aarch64-linux-gnu libc-dev-arm64-cross qemu-user-static"
+	;;
+gcc-arm32-qemu-cross)
+	export CC="/usr/lib/ccache/gcc"
+	export CCACHE_DIR="`pwd`/ccache"
+	DOCKR_PLATFORM="arm/v7"
+	PKGS="`exclude_pkgs 2.3.7` gcc g++ ccache"
+	EXCLUDE_MODULES_ADD="db_unixodbc"
+	;;
+clang-arm32-qemu-cross)
+	export CC="/usr/lib/ccache/clang"
+	export CCACHE_DIR="`pwd`/ccache"
+	DOCKR_PLATFORM="arm/v7"
+	PKGS="`exclude_pkgs 2.3.7` clang llvm-dev ccache"
+	EXCLUDE_MODULES_ADD="db_unixodbc"
+        ;;
+gcc-arm64-qemu-cross)
+	export CC="/usr/lib/ccache/gcc"
+	export CCACHE_DIR="`pwd`/ccache"
+	DOCKR_PLATFORM="arm64/v8"
+	PKGS="`exclude_pkgs 2.3.7` gcc g++ ccache"
+	EXCLUDE_MODULES_ADD="db_unixodbc"
+	;;
+clang-arm64-qemu-cross)
+	export CC="/usr/lib/ccache/clang"
+	export CCACHE_DIR="`pwd`/ccache"
+	DOCKR_PLATFORM="arm64/v8"
+	PKGS="`exclude_pkgs 2.3.7` clang llvm-dev ccache"
+	EXCLUDE_MODULES_ADD="db_unixodbc"
+	;;
+clang)
+	export CC="${COMPILER}"
+	export AR="llvm-ar"
+	export RANLIB="llvm-ranlib"
+	export GCOV_CMD="llvm-cov gcov"
+	PKGS="${PKGS} clang llvm-dev"
+	;;
+clang-i386-cross)
+	export CC="clang"
+	CC_EXTRA_OPTS="-Werror -m32"
+	MAKE_TGT="opensips"
+	DOCKR_PLATFORM="x86_64"
+	export BUILD_OS="ubuntu:18.04"
+	PRE_INSTALL_CMD="${SUDO} dpkg --add-architecture i386"
+	PKGS="`exclude_pkgs 2.3.7` clang llvm-dev libc6-dev:i386 libstdc++6:i386 lib32gcc-7-dev"
+	;;
+gcc-*)
+	export CC="${COMPILER}"
+	export AR="gcc-ar-${COMPILER_VER}"
+	export RANLIB="gcc-ranlib-${COMPILER_VER}"
+	export CPP_CMD="cpp-${COMPILER_VER}"
+	export GCOV_CMD="gcov-${COMPILER_VER}"
+	PKGS="${PKGS} gcc-${COMPILER_VER} g++-${COMPILER_VER}"
+	;;
+clang-*)
+	export CC="${COMPILER}"
+	export AR="llvm-ar-${COMPILER_VER}"
+	export RANLIB="llvm-ranlib-${COMPILER_VER}"
+	export GCOV_CMD="llvm-cov-${COMPILER_VER} gcov"
+	PKGS="${PKGS} clang-${COMPILER_VER} llvm-${COMPILER_VER}-dev libc++-${COMPILER_VER}-dev libc++abi-${COMPILER_VER}-dev"
+	;;
+*)
+	printf 'COMPILER="%s" is unknown / unsupported\n' "${COMPILER}" 1>&2
+	exit 1
+	;;
+esac

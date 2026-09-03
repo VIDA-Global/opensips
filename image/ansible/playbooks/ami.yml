@@ -1,0 +1,7 @@
+---
+- name: Build the OpenSIPS ARM64 image
+  hosts: all
+  become: true
+  gather_facts: true
+  roles:
+    - role: opensips_ami

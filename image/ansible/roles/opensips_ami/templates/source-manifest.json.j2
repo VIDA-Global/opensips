@@ -1,0 +1,8 @@
+{
+  "architecture": "arm64",
+  "distribution": "Ubuntu 24.04",
+  "modules": {{ opensips_ami_modules | sort | to_json }},
+  "opensips_source_commit": "{{ opensips_ami_source_commit }}",
+  "opensips_source_sha256": "{{ opensips_ami_source_sha256 }}",
+  "opensips_version": "{{ opensips_ami_version }}"
+}

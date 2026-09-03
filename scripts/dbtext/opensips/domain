@@ -1,0 +1,1 @@
+id(int,auto) domain(string) attrs(string,null) accept_subdomain(int) last_modified(int) 

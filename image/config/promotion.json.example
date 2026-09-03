@@ -1,0 +1,10 @@
+{
+  "build_id": "123456789-1",
+  "destinations": {
+    "us-east-1": "alias/opensips-ami",
+    "us-west-2": "alias/opensips-ami"
+  },
+  "expected_account_id": "123456789012",
+  "source_ami_id": "ami-0123456789abcdef0",
+  "source_region": "us-east-2"
+}

@@ -1,0 +1,67 @@
+---
+- name: Create the OpenSIPS system group
+  ansible.builtin.group:
+    name: opensips
+    system: true
+
+- name: Create the OpenSIPS system user
+  ansible.builtin.user:
+    name: opensips
+    group: opensips
+    system: true
+    shell: /usr/sbin/nologin
+    home: /var/lib/opensips
+    create_home: false
+
+- name: Create persistent OpenSIPS directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /etc/opensips, owner: root, group: opensips, mode: '0750' }
+    - { path: /var/lib/opensips, owner: opensips, group: opensips, mode: '0750' }
+    - { path: /var/log/opensips, owner: opensips, group: opensips, mode: '0750' }
+
+- name: Install the runtime configuration helper
+  ansible.builtin.copy:
+    src: opensips-runtime-config.py
+    dest: /usr/local/sbin/opensips-runtime-config
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install the runtime configuration service
+  ansible.builtin.template:
+    src: opensips-runtime-config.service.j2
+    dest: /etc/systemd/system/opensips-runtime-config.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload systemd
+
+- name: Install the hardened OpenSIPS service
+  ansible.builtin.template:
+    src: opensips.service.j2
+    dest: /etc/systemd/system/opensips.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload systemd
+
+- name: Enable services without starting them in the image build
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+  loop:
+    - opensips-runtime-config.service
+    - opensips.service
+
+- name: Apply pending systemd handler before verification
+  ansible.builtin.meta: flush_handlers
+
+- name: Verify systemd unit definitions
+  ansible.builtin.command: systemd-analyze verify /etc/systemd/system/opensips-runtime-config.service /etc/systemd/system/opensips.service
+  changed_when: false
