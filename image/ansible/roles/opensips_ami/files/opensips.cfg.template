@@ -1,0 +1,223 @@
+#### OpenSIPS 3.6.8 HA B2BUA policy
+# Installed by the AMI and rendered from the validated schema-v1 runtime secret.
+
+#### Core
+log_level=2
+stderror_enabled=no
+syslog_enabled=yes
+syslog_facility=LOG_LOCAL0
+udp_workers=8
+tcp_connection_lifetime=3600
+mpath="/usr/lib/aarch64-linux-gnu/opensips/modules/"
+
+socket=udp:@@PRIVATE_IP@@:5060 as @@ADVERTISED_IP@@:5060
+socket=tls:@@PRIVATE_IP@@:5061 as @@ADVERTISED_IP@@:5061
+socket=bin:@@PRIVATE_IP@@:5566
+
+#### Modules
+loadmodule "proto_udp.so"
+loadmodule "sl.so"
+loadmodule "tm.so"
+loadmodule "maxfwd.so"
+loadmodule "sipmsgops.so"
+loadmodule "rr.so"
+loadmodule "db_postgres.so"
+loadmodule "proto_bin.so"
+loadmodule "tls_openssl.so"
+loadmodule "tls_mgm.so"
+loadmodule "proto_tls.so"
+loadmodule "clusterer.so"
+loadmodule "dialog.so"
+loadmodule "freeswitch.so"
+loadmodule "load_balancer.so"
+loadmodule "uac_auth.so"
+loadmodule "b2b_entities.so"
+loadmodule "b2b_logic.so"
+loadmodule "rtpengine.so"
+
+#### TLS: mutual TLS is required on the carrier TLS listener
+modparam("tls_mgm", "server_domain", "carrier-in")
+modparam("tls_mgm", "match_ip_address", "[carrier-in]@@PRIVATE_IP@@:5061")
+modparam("tls_mgm", "match_sip_domain", "[carrier-in]*")
+modparam("tls_mgm", "certificate", "[carrier-in]/run/opensips-secure/config/tls/certificate.pem")
+modparam("tls_mgm", "private_key", "[carrier-in]/run/opensips-secure/config/tls/private-key.pem")
+modparam("tls_mgm", "ca_list", "[carrier-in]/run/opensips-secure/config/tls/ca-bundle.pem")
+modparam("tls_mgm", "tls_method", "[carrier-in]TLSv1_2-TLSv1_3")
+modparam("tls_mgm", "verify_cert", "[carrier-in]1")
+modparam("tls_mgm", "require_cert", "[carrier-in]1")
+
+#### Cluster and replicated state
+modparam("clusterer", "db_url", "@@DATABASE_URL@@")
+modparam("clusterer", "my_node_id", @@NODE_ID@@)
+modparam("clusterer", "ping_interval", 1)
+modparam("clusterer", "ping_timeout", 500)
+modparam("clusterer", "node_timeout", 5)
+modparam("clusterer", "sharing_tag", "state-owner/@@CLUSTER_ID@@=@@STATE_OWNER@@")
+
+modparam("dialog", "db_url", "@@DATABASE_URL@@")
+modparam("dialog", "db_mode", 1)
+modparam("dialog", "dialog_replication_cluster", @@CLUSTER_ID@@)
+
+#### FreeSWITCH live-capacity load balancing
+modparam("freeswitch", "event_heartbeat_interval", 20)
+modparam("freeswitch", "esl_connect_timeout", 3000)
+modparam("freeswitch", "esl_cmd_timeout", 3000)
+modparam("load_balancer", "db_url", "@@DATABASE_URL@@")
+modparam("load_balancer", "fetch_freeswitch_stats", 1)
+modparam("load_balancer", "initial_freeswitch_load", 1)
+modparam("load_balancer", "probing_interval", 10)
+modparam("load_balancer", "probing_method", "OPTIONS")
+modparam("load_balancer", "probing_from", "sip:health@@@ADVERTISED_IP@@")
+modparam("load_balancer", "cluster_id", @@CLUSTER_ID@@)
+modparam("load_balancer", "cluster_sharing_tag", "state-owner")
+
+#### Replicated B2BUA state
+modparam("b2b_entities", "db_url", "@@DATABASE_URL@@")
+modparam("b2b_entities", "db_mode", 1)
+modparam("b2b_entities", "cluster_id", @@CLUSTER_ID@@)
+modparam("b2b_entities", "update_period", 5)
+modparam("b2b_logic", "db_url", "@@DATABASE_URL@@")
+modparam("b2b_logic", "db_mode", 1)
+modparam("b2b_logic", "update_period", 5)
+modparam("b2b_logic", "max_duration", 14400)
+modparam("b2b_logic", "script_req_route", "B2B_REQUEST")
+modparam("b2b_logic", "script_reply_route", "B2B_REPLY")
+modparam("b2b_logic", "server_address", "sip:sbc@@@ADVERTISED_IP@@:5060")
+
+#### RTPEngine set 1: replace both control endpoints and weights
+modparam("rtpengine", "rtpengine_sock", "1 == @@RTPENGINE_NODES@@")
+modparam("rtpengine", "setid_avp", "$avp(rtpengine_set)")
+modparam("rtpengine", "error_pv", "$var(rtpengine_error)")
+modparam("rtpengine", "rtpengine_tout", 1)
+modparam("rtpengine", "rtpengine_retr", 2)
+modparam("rtpengine", "rtpengine_disable_tout", 10)
+modparam("rtpengine", "rtpengine_timer_interval", 1)
+modparam("rtpengine", "ping_enabled", 1)
+
+#### Initial carrier request route
+route {
+    if (!mf_process_maxfwd_header(16)) {
+        sl_send_reply(483, "Too Many Hops");
+        exit;
+    }
+
+    # This example accepts carrier traffic only. Add every production carrier
+    # signaling address explicitly; never trust a SIP header as source identity.
+    if (($socket_in(proto) == "udp" && @@CARRIER_UDP_REJECT@@) ||
+        ($socket_in(proto) == "tls" && @@CARRIER_TLS_REJECT@@) ||
+        ($socket_in(proto) != "udp" && $socket_in(proto) != "tls")) {
+        sl_send_reply(403, "Forbidden");
+        exit;
+    }
+
+    if (is_method("OPTIONS") && !has_totag()) {
+        sl_send_reply(200, "OK");
+        exit;
+    }
+
+    if (!is_method("INVITE") || has_totag()) {
+        sl_send_reply(405, "Method Not Allowed");
+        exit;
+    }
+
+    # This baseline intentionally rejects late offer. Supporting SDP in the
+    # first reliable response and ACK requires a separately tested B2B flow.
+    if (!has_body("application/sdp")) {
+        sl_send_reply(488, "SDP Offer Required");
+        exit;
+    }
+
+    # Strip spoofed values case-insensitively, then construct the sole trusted
+    # value from OpenSIPS's network source address pseudo-variable.
+    remove_hf_glob("X-SAGE-*");
+    $avp(sage_header_name) = "X-SAGE-Source-IP";
+    $avp(sage_header_body) = $si;
+
+    if (!lb_start(1, "channels", "rs", $var(freeswitch_attrs))) {
+        sl_send_reply(503, "No FreeSWITCH Capacity");
+        exit;
+    }
+
+    $avp(rtpengine_set) = 1;
+    if (!rtpengine_offer("replace-origin replace-session-connection ICE=remove", $var(rtpengine_socket))) {
+        lb_reset();
+        sl_send_reply(503, "Media Relay Unavailable");
+        exit;
+    }
+
+    # These values become part of the replicated B2B context. A custom media
+    # Call-ID is required because each B2B leg has its own signaling Call-ID.
+    $b2b_logic.ctx(media_callid) = $ci;
+    $b2b_logic.ctx(media_fromtag) = $ft;
+    $b2b_logic.ctx(media_socket) = $var(rtpengine_socket);
+    $b2b_logic.ctx(source_ip) = $si;
+    $b2b_logic.ctx(freeswitch_uri) = $du;
+
+    if ($socket_in(proto) == "tls") {
+        $var(carrier_contact) = "sip:sbc@@@ADVERTISED_IP@@:5061;transport=tls";
+    } else {
+        $var(carrier_contact) = "sip:sbc@@@ADVERTISED_IP@@:5060";
+    }
+    b2b_server_new("carrier", $var(carrier_contact));
+    force_send_socket("udp:@@PRIVATE_IP@@:5060");
+    b2b_client_new("freeswitch", $ru, $du, "SAGE SBC", "sip:sbc@@@ADVERTISED_IP@@:5060",
+        $avp(sage_header_name), $avp(sage_header_body));
+    # The setup and maximum-duration timers are replicated. Monitoring must
+    # tolerate duplicate idempotent teardown messages from surviving nodes and
+    # remove any orphaned RTPEngine allocation after timeout.
+    b2b_init_request("sage-freeswitch", "setup-timeout=30", "B2B_REQUEST", "B2B_REPLY");
+    exit;
+}
+
+#### Requests for established B2B sessions
+route[B2B_REQUEST] {
+    $avp(rtpengine_set) = 1;
+    $var(media_flags) = "replace-origin replace-session-connection ICE=remove call-id=" +
+        $b2b_logic.ctx(media_callid) + " from-tag=" + $b2b_logic.ctx(media_fromtag);
+
+    if (is_method("BYE") || is_method("CANCEL")) {
+        rtpengine_delete($var(media_flags), $b2b_logic.ctx(media_socket));
+        b2b_pass_request();
+        exit;
+    }
+
+    if ((is_method("INVITE") || is_method("UPDATE")) && has_body("application/sdp")) {
+        $var(candidate_socket) = $b2b_logic.ctx(media_socket);
+        if (!rtpengine_offer($var(media_flags), $var(candidate_socket)) ||
+            $var(candidate_socket) != $b2b_logic.ctx(media_socket)) {
+            if ($var(candidate_socket) != $b2b_logic.ctx(media_socket)) {
+                rtpengine_delete($var(media_flags), $var(candidate_socket));
+            }
+            b2b_send_reply(500, "Media Renegotiation Failed");
+            exit;
+        }
+    }
+
+    b2b_pass_request();
+    exit;
+}
+
+#### Replies for established B2B sessions
+route[B2B_REPLY] {
+    $avp(rtpengine_set) = 1;
+    $var(media_flags) = "replace-origin replace-session-connection ICE=remove call-id=" +
+        $b2b_logic.ctx(media_callid) + " from-tag=" + $b2b_logic.ctx(media_fromtag);
+
+    if ($rm == "INVITE" && $rs >= 180 && $rs < 300 && has_body("application/sdp")) {
+        $var(candidate_socket) = $b2b_logic.ctx(media_socket);
+        if (!rtpengine_answer($var(media_flags), $var(candidate_socket)) ||
+            $var(candidate_socket) != $b2b_logic.ctx(media_socket)) {
+            if ($var(candidate_socket) != $b2b_logic.ctx(media_socket)) {
+                rtpengine_delete($var(media_flags), $var(candidate_socket));
+            }
+            rtpengine_delete($var(media_flags), $b2b_logic.ctx(media_socket));
+            b2b_end_dlg_leg();
+            exit;
+        }
+    } else if ($rm == "INVITE" && $rs >= 300) {
+        rtpengine_delete($var(media_flags), $b2b_logic.ctx(media_socket));
+    }
+
+    b2b_handle_reply();
+    exit;
+}

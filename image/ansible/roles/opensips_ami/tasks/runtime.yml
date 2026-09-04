@@ -33,6 +33,14 @@
     group: root
     mode: '0755'
 
+- name: Install the default OpenSIPS policy template
+  ansible.builtin.copy:
+    src: opensips.cfg.template
+    dest: /etc/opensips/opensips.cfg.template
+    owner: root
+    group: opensips
+    mode: '0640'
+
 - name: Install the runtime configuration service
   ansible.builtin.template:
     src: opensips-runtime-config.service.j2

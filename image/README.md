@@ -119,26 +119,32 @@ Changing an OpenSIPS version requires reviewing the canonical tag and commit, ca
 The default dynamic allowlist is:
 
 ```text
-b2b_entities b2b_logic clusterer db_postgres dialog maxfwd proto_bin
-proto_hep proto_tls rr rtpengine sipmsgops sl textops tls_mgm
-tls_openssl tm topology_hiding tracer
+b2b_entities b2b_logic clusterer db_postgres dialog freeswitch load_balancer
+maxfwd proto_bin proto_hep proto_tls rr rtpengine sipmsgops sl textops
+tls_mgm tls_openssl tm topology_hiding tracer
+uac_auth
 ```
 
-UDP and TCP protocol support are part of the core transport build in this release line. The installed dynamic inventory is checked exactly and stored at `/usr/share/opensips-ami/modules.txt`.
+UDP and TCP protocol support are part of the core transport build in this release line, but runtime policy must still activate the required `proto_udp.so` or `proto_tcp.so` handler. The installed dynamic inventory is checked exactly and stored at `/usr/share/opensips-ami/modules.txt`.
 
-`proto_hep` and `tracer` provide HEP export to an external HOMER collector. The AMI does not install `sipcapture` or operate as a capture database.
+`freeswitch` and `load_balancer` provide live ESL capacity-based FreeSWITCH selection. `proto_hep` and `tracer` provide HEP export to an external HOMER collector. The AMI does not install `sipcapture` or operate as a capture database.
 
 ## Runtime Contract
 
-The AMI contains no deployable SIP policy, database credential, certificate, private key, topology-hiding secret, HEP credential, or RTPengine endpoint. At boot:
+The AMI installs the reviewed HA B2BUA policy at `/etc/opensips/opensips.cfg.template`. The template is root-owned, is not a runnable configuration, and contains no deployment address, database credential, certificate, private key, FreeSWITCH credential, or RTPengine endpoint. The only supported runtime secret format is schema version 1. Arbitrary `opensips_config` text is rejected.
+
+At boot:
 
 1. The launch template exposes tags through IMDS and requires IMDSv2.
 2. `opensips-runtime-config.service` reads only `OpenSIPSConfigSecretArn` and `OpenSIPSConfigSecretVersion`.
 3. The helper verifies that the ARN belongs to the instance account and region.
 4. The instance role retrieves only the IAM-authorized immutable secret version.
-5. The helper validates the strict JSON schema and writes an atomic root:`opensips` runtime bundle.
-6. OpenSIPS parses the candidate with `opensips -C` as the service user.
-7. `opensips.service` starts only after successful validation.
+5. The helper validates every schema-v1 field before substituting the fixed template.
+6. It writes an atomic root:`opensips` runtime bundle under `/run/opensips-secure/config`.
+7. OpenSSL parses the certificate, private key, and CA bundle and verifies that the certificate and key match.
+8. OpenSIPS checks policy syntax and route function contexts with `opensips -C` as the service user.
+9. A failed render, cryptographic check, or policy parse restores the previous valid bundle and prevents startup.
+10. `opensips.service` starts only after successful validation.
 
 The required launch-template metadata settings are:
 
@@ -149,15 +155,65 @@ HttpPutResponseHopLimit=1
 InstanceMetadataTags=enabled
 ```
 
-The secret schema is shown in `config/runtime-secret.json.example`. The `opensips_config` value is trusted application configuration and may refer to TLS files at:
+### Schema Version 1
+
+`config/runtime-secret.json.example` shows the complete secret, while `config/deployment.json.example` is the non-secret input accepted by the packaging command. The top-level object must contain exactly `schema_version`, `deployment`, and `tls`.
+
+| Field | Type | Validation and purpose |
+| --- | --- | --- |
+| `schema_version` | integer | Must be exactly `1` |
+| `deployment.node_id` | integer | Unique positive cluster node ID |
+| `deployment.cluster_id` | integer | Positive cluster ID shared by both nodes |
+| `deployment.private_ip` | string | Canonical IPv4 address used by UDP, TLS, BIN, and outbound UDP sockets |
+| `deployment.advertised_ip` | string | Canonical frontend IPv4 address advertised in SIP signaling |
+| `deployment.state_owner` | string | Exactly `active` or `backup`; deploy one of each |
+| `deployment.database_url` | string | `postgres://` URL, at most 1024 characters, with no whitespace, quotes, backslashes, or NUL; percent-encode credentials |
+| `deployment.carrier_udp_ips` | array | Non-empty, unique canonical IPv4 source allowlist for UDP |
+| `deployment.carrier_tls_ips` | array | Non-empty, unique canonical IPv4 source allowlist for mutual TLS |
+| `deployment.rtpengine_nodes` | array | Non-empty unique `udp:host:port` endpoints with integer weights from 1 through 1000 |
+| `tls.certificate` | string | Non-empty PEM certificate chain |
+| `tls.private_key` | string | Non-empty PEM private key |
+| `tls.ca_bundle` | string | Non-empty PEM trust bundle used to verify carrier client certificates |
+
+Unknown, missing, duplicate, malformed, noncanonical, or out-of-range values fail closed. The helper uses OpenSSL to parse the certificate, unencrypted private key, and CA bundle and verifies that the certificate and key match. Trust purpose, certificate lifetime, revocation, hostname/SAN policy, and carrier identity remain deployment acceptance responsibilities. `opensips -C` checks syntax and route contexts but does not initialize PostgreSQL, FreeSWITCH ESL, RTPEngine, or listening sockets; those dependencies are proven only when `opensips.service` starts and deployment health checks pass.
+
+The rendered files are:
 
 ```text
+/run/opensips-secure/config/opensips.cfg
 /run/opensips-secure/config/tls/certificate.pem
 /run/opensips-secure/config/tls/private-key.pem
 /run/opensips-secure/config/tls/ca-bundle.pem
 ```
 
-IAM, tag mutation permissions, and the secret resource policy must all prevent a workload from selecting an unrelated secret. The helper's account/region check is defense in depth, not an IAM substitute.
+Directories use mode `0750`; files use mode `0640`; ownership is root:`opensips`. The bundle lives on `/run` and is recreated after boot. Neither HUP nor `systemctl reload opensips` fetches a new secret. Roll out a new immutable secret version by updating the launch-template version tag and replacing instances.
+
+The renderer can roll back failures it detects before service startup. A later module-initialization or dependency failure does not automatically restore the previous secret version because the renderer and OpenSIPS are separate systemd units. Production rollout automation must detect `opensips.service` failure and replace the instance with the previous AMI and pinned secret version.
+
+IAM, instance-tag mutation permissions, the secret resource policy, and the KMS key policy must all prevent a workload from selecting or decrypting an unrelated secret. The helper's account/region validation is defense in depth, not an IAM substitute.
+
+## Default SIP Policy
+
+The installed template implements a two-node carrier ingress tier with UDP and mutual TLS, B2BUA topology isolation, PostgreSQL and cluster replication, weighted RTPEngine selection, and live FreeSWITCH ESL capacity. Each node receives a separate schema-v1 secret because `node_id`, `private_ip`, and `state_owner` differ. Both secrets normally share `cluster_id`, `advertised_ip`, database, carrier allowlists, RTPEngine nodes, and TLS trust policy.
+
+The policy removes every case-insensitive carrier-provided `X-SAGE-*` header and supplies exactly one `X-SAGE-Source-IP` to the FreeSWITCH B2B leg using OpenSIPS `$si`. The value is the packet's remote network source, not a SIP header, Via value, forwarded header, or local listener address. Unlisted carrier source addresses receive `403`; initial INVITEs without SDP receive `488`.
+
+FreeSWITCH destinations and ESL credentials are intentionally not in the instance secret. The `load_balancer` module reads them from PostgreSQL so operators can change capacity targets without replacing instances. Apply the canonical schemas listed in `config/production-seed.postgres.sql.example`, replace every seed placeholder, restrict ESL to the OpenSIPS security group and ACL, and use a unique least-privilege ESL credential.
+
+Package reviewed deployment values and TLS material without manually constructing JSON:
+
+```bash
+umask 077
+make --no-print-directory -C image package-secret \
+  DEPLOYMENT=config/deployment.json \
+  CERT=/secure/carrier-chain.pem \
+  KEY=/secure/carrier-key.pem \
+  CA=/secure/carrier-ca.pem > /secure/opensips-runtime-secret.json
+```
+
+The packager accepts regular files only and rejects empty, invalid UTF-8, invalid JSON, NUL-containing, and over-64-KiB output. The generated file contains a private key: keep the restrictive umask, upload it as an immutable secret version, verify the version ID, and securely remove local output according to the deployment's secret-handling procedure.
+
+The policy provides weighted new-call failover between RTPEngine nodes and requires an SDP offer in the initial INVITE. OpenSIPS does not transfer established media state. A failed re-INVITE or UPDATE is rejected without changing the stored relay; a failed initial answer tears down its allocation and current B2B leg. OpenSIPS 3.6 configuration does not expose an atomic terminate-both-legs operation, so monitoring must terminate the full tuple through `b2b_terminate_call` when required. Read `docs/media-recovery.md` before changing this behavior.
 
 ## AMI Identity
 

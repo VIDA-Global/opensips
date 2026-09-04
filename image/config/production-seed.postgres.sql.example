@@ -1,0 +1,32 @@
+-- Seed data for the default opensips.cfg.template policy.
+-- From the repository root at the exact source commit recorded by the AMI,
+-- apply these canonical OpenSIPS 3.6 PostgreSQL schemas first:
+--   scripts/postgres/standard-create.sql
+--   scripts/postgres/clusterer-create.sql
+--   scripts/postgres/dialog-create.sql
+--   scripts/postgres/b2b-create.sql
+--   scripts/postgres/load_balancer-create.sql
+-- Replace every address and credential before executing this transaction.
+
+BEGIN;
+
+INSERT INTO clusterer
+    (cluster_id, node_id, url, state, no_ping_retries, priority, sip_addr, flags, description)
+VALUES
+    (10, 1, 'bin:10.0.1.10:5566', 1, 3, 50, 'sip:10.0.1.10:5060', 'seed', 'OpenSIPS node A'),
+    (10, 2, 'bin:10.0.1.11:5566', 1, 3, 50, 'sip:10.0.1.11:5060', NULL, 'OpenSIPS node B');
+
+-- The ESL account should be ACL-restricted to the OpenSIPS nodes and granted
+-- only the permissions needed for HEARTBEAT statistics. Do not reuse the
+-- FreeSWITCH default event_socket password.
+INSERT INTO load_balancer
+    (group_id, dst_uri, resources, probe_mode, attrs, description)
+VALUES
+    (1, 'sip:10.0.3.10:5060',
+        'channels=fs://opensips:REPLACE_ESL_PASSWORD_A@10.0.3.10:8021',
+        2, 'site=az-a', 'FreeSWITCH gateway A'),
+    (1, 'sip:10.0.3.11:5060',
+        'channels=fs://opensips:REPLACE_ESL_PASSWORD_B@10.0.3.11:8021',
+        2, 'site=az-b', 'FreeSWITCH gateway B');
+
+COMMIT;

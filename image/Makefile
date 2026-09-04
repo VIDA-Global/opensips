@@ -8,7 +8,7 @@ VARS_FILE ?= packer/opensips.pkrvars.hcl
 
 .DEFAULT_GOAL := help
 
-.PHONY: help init fmt validate lint source test source-test build inspect promote clean
+.PHONY: help init fmt validate lint source test source-test package-secret build inspect promote clean
 
 help:
 	@printf '%s\n' \
@@ -20,6 +20,7 @@ help:
 	  '  make source                       Download and verify OpenSIPS source' \
 	  '  make test                         Run local contract tests' \
 	  '  make source-test MODE=<mode>      Run Linux source build, unit, or fuzz tests' \
+	  '  make package-secret DEPLOYMENT=<file> CERT=<file> KEY=<file> CA=<file>' \
 	  '  make build VARS_FILE=<file>        Build the source-region AMI (uses AWS)' \
 	  '  make inspect                      Inspect the Packer template locally' \
 	  '  make promote MANIFEST=<file>       Promote a tested AMI (uses AWS)' \
@@ -47,6 +48,11 @@ test:
 source-test:
 	@test -n "$${MODE:-}" || { printf 'MODE must be build, unit, or fuzz\n' >&2; exit 64; }
 	./scripts/run-source-tests.sh "$$MODE"
+
+package-secret:
+	@test -n "$${DEPLOYMENT:-}" -a -n "$${CERT:-}" -a -n "$${KEY:-}" -a -n "$${CA:-}" || { \
+		printf 'DEPLOYMENT, CERT, KEY, and CA are required\n' >&2; exit 64; }
+	@python3 scripts/package-runtime-secret.py "$$DEPLOYMENT" "$$CERT" "$$KEY" "$$CA"
 
 build:
 	@test -f "$(VARS_FILE)" || { printf 'missing VARS_FILE: %s\n' "$(VARS_FILE)" >&2; exit 64; }

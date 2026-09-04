@@ -9,7 +9,8 @@ done
 printf '%s\n' \
   'This harness delegates SIP traffic generation to SIP_TEST_COMMAND.' \
   'The command must prove confirmed B2B state takeover, kill the selected RTPengine,' \
-  'drive a two-leg re-INVITE through a replacement RTPengine, and reject partial recovery.'
+  'prove that renegotiation does not migrate to a replacement RTPengine, reject the' \
+  'failed operation, and verify deterministic full-call cleanup through monitoring.'
 
 export NODE_A_HOST NODE_B_HOST RTPENGINE_A_HOST RTPENGINE_B_HOST
 "$SIP_TEST_COMMAND"

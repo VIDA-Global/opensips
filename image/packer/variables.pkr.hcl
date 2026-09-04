@@ -130,6 +130,8 @@ variable "opensips_modules" {
     "clusterer",
     "db_postgres",
     "dialog",
+    "freeswitch",
+    "load_balancer",
     "maxfwd",
     "proto_bin",
     "proto_hep",
@@ -143,7 +145,8 @@ variable "opensips_modules" {
     "tls_openssl",
     "tm",
     "topology_hiding",
-    "tracer"
+    "tracer",
+    "uac_auth"
   ]
 }
 

@@ -1,0 +1,24 @@
+{
+  "node_id": 1,
+  "cluster_id": 10,
+  "private_ip": "10.0.1.10",
+  "advertised_ip": "198.51.100.10",
+  "state_owner": "active",
+  "database_url": "postgres://opensips:REPLACE_PERCENT_ENCODED_PASSWORD@db.internal.example:5432/opensips",
+  "carrier_udp_ips": [
+    "192.0.2.10"
+  ],
+  "carrier_tls_ips": [
+    "192.0.2.11"
+  ],
+  "rtpengine_nodes": [
+    {
+      "url": "udp:10.0.2.10:2223",
+      "weight": 10
+    },
+    {
+      "url": "udp:10.0.2.11:2223",
+      "weight": 10
+    }
+  ]
+}

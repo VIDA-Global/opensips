@@ -11,6 +11,8 @@ opensips_ami_modules:
   - clusterer
   - db_postgres
   - dialog
+  - freeswitch
+  - load_balancer
   - maxfwd
   - proto_bin
   - proto_hep
@@ -25,6 +27,7 @@ opensips_ami_modules:
   - tm
   - topology_hiding
   - tracer
+  - uac_auth
 opensips_ami_build_packages:
   - bison
   - build-essential
@@ -43,6 +46,7 @@ opensips_ami_runtime_packages:
   - libpq5
   - libssl3t64
   - libxml2
+  - openssl
   - python3
   - python3-boto3
   - tini

@@ -51,9 +51,37 @@ The build and validation instances have no public IP. The self-hosted runner req
 - EC2 IMDS at `169.254.169.254`.
 - Regional Secrets Manager endpoints.
 - The secret's KMS key through Secrets Manager.
-- PostgreSQL, RTPengine, cluster BIN peers, SIP peers, and the external HEP collector as selected by deployment configuration.
+- PostgreSQL, RTPengine, private cluster BIN peers, carrier SIP peers, and FreeSWITCH SIP/ESL endpoints selected by schema v1 and database rows.
 
-Security groups should separate SIP UDP/TCP/TLS, private BIN traffic, PostgreSQL, RTPengine control, HEP export, health checks, and operator access. BIN must never be internet-accessible.
+Security groups should separate SIP UDP/TLS, private BIN traffic, PostgreSQL, RTPEngine control and media, FreeSWITCH SIP/ESL, health checks, and operator access. BIN must never be internet-accessible.
+
+The production reference additionally requires private TCP/8021 from OpenSIPS to each FreeSWITCH ESL listener, SIP signaling to each FreeSWITCH destination, and the complete negotiated RTP/RTCP range between RTPengine and both media sides. Restrict ESL with FreeSWITCH ACLs and a unique non-default credential. Do not expose BIN, PostgreSQL, RTPEngine control, or ESL to carrier or public networks.
+
+## Default Policy Deployment
+
+The AMI installs `/etc/opensips/opensips.cfg.template`; operators do not supply arbitrary OpenSIPS text. Create one schema-v1 deployment object per node from `config/deployment.json.example`. Give each node a unique `node_id` and `private_ip`. Set one node's `state_owner` to `active` and the other's to `backup`. Keep `cluster_id`, `advertised_ip`, database, carrier allowlists, RTPEngine nodes, and TLS policy equivalent. The frontend must preserve SIP flow affinity and deliver subsequent dialog traffic to a node that can access replicated B2B state.
+
+From a checkout at the exact OpenSIPS source commit recorded by the AMI, apply the repository-root PostgreSQL schema files named in `config/production-seed.postgres.sql.example`, then apply its reviewed cluster and FreeSWITCH rows. These schema files are deployment inputs and are not retained in the baked AMI. Use one seed node per cluster. Confirm that both cluster nodes report the B2B entity and load-balancer replication capabilities before admitting traffic.
+
+Package each node's secret using `make --no-print-directory -C image package-secret DEPLOYMENT=... CERT=... KEY=... CA=...`. The `--no-print-directory` option keeps Make status banners out of the JSON stream. Use `umask 077`, store the output as a new immutable Secrets Manager version, set `OpenSIPSConfigSecretVersion` to its exact version ID, and replace instances gradually. A service reload does not retrieve a new secret version.
+
+The renderer accepts only schema version 1. Its deployment object must contain exactly `node_id`, `cluster_id`, `private_ip`, `advertised_ip`, `state_owner`, `database_url`, `carrier_udp_ips`, `carrier_tls_ips`, and `rtpengine_nodes`. The TLS object must contain exactly `certificate`, `private_key`, and `ca_bundle`. See the README schema table for types and bounds. Legacy `opensips_config` payloads and unknown extension fields are rejected.
+
+The boot sequence attempts rendering up to ten times with a 15-second backoff, bounded by the unit's 180-second startup timeout. Successful rendering atomically replaces `/run/opensips-secure/config`. The helper validates TLS parsing and key matching with OpenSSL, then checks policy syntax as the `opensips` service user. If either check fails, it restores the previous bundle, logs only a sanitized error, and exits nonzero. On a new instance there is no previous bundle, so `opensips.service` remains stopped.
+
+Configuration checking does not initialize database, ESL, RTPEngine, or network listeners. A failure during subsequent `opensips.service` module initialization does not trigger renderer rollback. The deployment controller must treat service readiness failure as a failed rollout and replace the instance using the previous AMI and exact secret version.
+
+Before production admission, verify all of the following in a deployment-owned SIP harness:
+
+- Spoofed and mixed-case `X-SAGE-*` headers never reach FreeSWITCH.
+- FreeSWITCH receives one `X-SAGE-Source-IP` containing the carrier packet's `$si` value.
+- Untrusted source addresses and invalid TLS clients receive no routing privileges.
+- Calls distribute according to live ESL capacity and subsequent calls stop selecting failed probes; the example does not retry the same B2B setup on a second FreeSWITCH.
+- The stored RTPEngine selection never changes; any fallback allocation attempted internally by the module is detected, deleted, and rejected.
+- OpenSIPS node replacement preserves confirmed B2B state within the documented HA boundary.
+- RTPEngine renegotiation failure is rejected without moving media; monitoring can terminate the full tuple through `b2b_terminate_call` when policy requires hard failure.
+- B2B setup and maximum-duration expiry may produce duplicate idempotent teardown requests from replicated nodes; monitoring removes orphaned RTPEngine sessions and deduplicates alerts.
+- Initial-answer media failure may leave the carrier transaction pending until the B2B setup timeout; monitoring should invoke `b2b_terminate_call` immediately using the logged tuple key.
 
 ## Build And Validation
 
@@ -81,12 +109,12 @@ The Packer manifest contains the source-region AMI ID. The credentialed validati
 3. Verifies architecture, Ubuntu version, EBS encryption, OpenSIPS version, runtime rendering, and systemd readiness.
 4. Runs `opensips -C` against the retrieved configuration.
 5. Reboots and checks both services again.
-6. Invokes an optional external SIP/HEP/HA harness.
+6. Invokes an optional external SIP and HA harness.
 7. Terminates the instance and deletes the key pair through its exit trap.
 
 The Ansible role is bake-only. It deliberately removes source inputs and resets cloud-init and machine identity at the end, so it is not a supported day-two configuration mechanism.
 
-For production acceptance, `AMI_POST_VALIDATION_SCRIPT` should additionally verify UDP, TCP, TLS, PostgreSQL, HEP receipt, two-node cluster synchronization, established B2B call takeover, RTPengine selection persistence, and the media-recovery scenarios in `media-recovery.md`.
+For production acceptance, `AMI_POST_VALIDATION_SCRIPT` should additionally verify UDP, mutual TLS, PostgreSQL, FreeSWITCH SIP/ESL health, two-node cluster synchronization, established B2B call takeover, RTPEngine selection persistence, trusted-header behavior, and the media-recovery scenarios in `media-recovery.md`.
 
 ## Promotion
 

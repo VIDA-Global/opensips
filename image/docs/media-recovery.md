@@ -2,13 +2,17 @@
 
 ## Supported HA Boundary
 
-The image contains `proto_bin`, `clusterer`, `dialog`, `b2b_entities`, and `b2b_logic`. These modules provide the building blocks for active-active replication of confirmed dialog and B2B state. Deployment configuration must still define node identity, private BIN peers, stable listener tags, database behavior, frontend traffic steering, and B2B routes.
+The image contains `proto_bin`, `clusterer`, `dialog`, `b2b_entities`, and `b2b_logic`. The installed policy fixes listeners, database modes, and B2B routes. Schema-v1 values provide node identity, advertised and private addresses, and the database URL; PostgreSQL `clusterer` rows provide private BIN peer topology. The deployment must still provide frontend flow steering, network isolation, monitoring, and tested endpoint behavior.
 
 The supported baseline claim is:
 
 > A surviving OpenSIPS node can provide new-call service and best-effort routing for a replicated confirmed dialog when its original RTPengine and SIP endpoints remain reachable.
 
 It does not preserve an early INVITE transaction, retransmission cache, process-local value, TCP connection, TLS session, or a failed RTPengine's media state.
+
+The installed `/etc/opensips/opensips.cfg.template` policy implements this baseline only. It probes and balances new allocations across multiple relays and records the selected control socket in replicated B2B context. It rejects a failed in-dialog renegotiation without retaining a fallback allocation; a failed initial answer tears down its allocation and current B2B leg. OpenSIPS 3.6 configuration cannot atomically terminate both existing `b2b_logic` legs, so monitoring must use the `b2b_terminate_call` MI command for deterministic full-call teardown. The default policy does not implement the automatic recovery state machine below.
+
+Replicated tuples retain their setup and lifetime timers on each node. Expiry can therefore produce duplicate BYE or CANCEL requests, which endpoints must handle idempotently. Tuple-expiry processing does not run the script's RTPEngine cleanup route, so monitoring must identify and delete orphaned media sessions after a setup or maximum-duration timeout.
 
 ## Why Detection Is Not Recovery
 
@@ -81,4 +85,4 @@ Use `tests/integration/ha-media-boundary.sh` with an environment-owned SIP test 
 - Duplicate failure events and idempotent cleanup.
 - Original RTPengine recovery before and after commit.
 
-Do not enable automatic B2BUA media recovery by default until these tests pass against every supported endpoint family and the production RTPengine topology. The AMI deliberately installs the modules but leaves application routing and automatic recovery disabled.
+Do not add automatic B2BUA media recovery to the default policy until these tests pass against every supported endpoint family and the production RTPEngine topology. The AMI enables carrier-to-FreeSWITCH application routing but deliberately leaves automatic established-media migration disabled.
