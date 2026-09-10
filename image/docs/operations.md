@@ -51,11 +51,14 @@ The build and validation instances have no public IP. The self-hosted runner req
 - EC2 IMDS at `169.254.169.254`.
 - Regional Secrets Manager endpoints.
 - The secret's KMS key through Secrets Manager.
-- PostgreSQL, RTPengine, private cluster BIN peers, carrier SIP peers, and FreeSWITCH SIP/ESL endpoints selected by schema v1 and database rows.
+- PostgreSQL, RTPengine, private cluster BIN peers, carrier SIP peers, and FreeSWITCH SIP endpoints selected by schema v1 and database rows.
 
-Security groups should separate SIP UDP/TLS, private BIN traffic, PostgreSQL, RTPEngine control and media, FreeSWITCH SIP/ESL, health checks, and operator access. BIN must never be internet-accessible.
+Security groups should separate SIP UDP/TLS, private BIN traffic, PostgreSQL, RTPengine control and media, FreeSWITCH SIP, health checks, and operator access. BIN must never be internet-accessible. OpenSIPS must not reach FreeSWITCH ESL.
 
-The production reference additionally requires private TCP/8021 from OpenSIPS to each FreeSWITCH ESL listener, SIP signaling to each FreeSWITCH destination, and the complete negotiated RTP/RTCP range between RTPengine and both media sides. Restrict ESL with FreeSWITCH ACLs and a unique non-default credential. Do not expose BIN, PostgreSQL, RTPEngine control, or ESL to carrier or public networks.
+Allow SIP signaling to FreeSWITCH and the negotiated media range between RTPengine
+and media peers. Physical channel observations must come from the fixed gateway's
+authenticated private HTTPS load endpoint, never OpenSIPS ESL. Do not expose BIN,
+PostgreSQL, RTPengine control, or ESL to carrier/public networks.
 
 ## Default Policy Deployment
 
@@ -69,14 +72,14 @@ The renderer accepts only schema version 1. Its deployment object must contain e
 
 The boot sequence attempts rendering up to ten times with a 15-second backoff, bounded by the unit's 180-second startup timeout. Successful rendering atomically replaces `/run/opensips-secure/config`. The helper validates TLS parsing and key matching with OpenSSL, then checks policy syntax as the `opensips` service user. If either check fails, it restores the previous bundle, logs only a sanitized error, and exits nonzero. On a new instance there is no previous bundle, so `opensips.service` remains stopped.
 
-Configuration checking does not initialize database, ESL, RTPEngine, or network listeners. A failure during subsequent `opensips.service` module initialization does not trigger renderer rollback. The deployment controller must treat service readiness failure as a failed rollout and replace the instance using the previous AMI and exact secret version.
+Configuration checking does not initialize database, RTPengine, or network listeners. A failure during subsequent `opensips.service` module initialization does not trigger renderer rollback. The deployment controller must treat service readiness failure as a failed rollout and replace the instance using the previous AMI and exact secret version.
 
 Before production admission, verify all of the following in a deployment-owned SIP harness:
 
 - Spoofed and mixed-case `X-SAGE-*` headers never reach FreeSWITCH.
 - FreeSWITCH receives one `X-SAGE-Source-IP` containing the carrier packet's `$si` value.
 - Untrusted source addresses and invalid TLS clients receive no routing privileges.
-- Calls distribute according to live ESL capacity and subsequent calls stop selecting failed probes; the example does not retry the same B2B setup on a second FreeSWITCH.
+- Validate physical-channel selection only after the direct gateway telemetry consumer is implemented; local dialog counters are not physical load. The current example does not retry a B2B setup on another FreeSWITCH.
 - The stored RTPEngine selection never changes; any fallback allocation attempted internally by the module is detected, deleted, and rejected.
 - OpenSIPS node replacement preserves confirmed B2B state within the documented HA boundary.
 - RTPEngine renegotiation failure is rejected without moving media; monitoring can terminate the full tuple through `b2b_terminate_call` when policy requires hard failure.
@@ -112,9 +115,24 @@ The Packer manifest contains the source-region AMI ID. The credentialed validati
 6. Invokes an optional external SIP and HA harness.
 7. Terminates the instance and deletes the key pair through its exit trap.
 
-The Ansible role is bake-only. It deliberately removes source inputs and resets cloud-init and machine identity at the end, so it is not a supported day-two configuration mechanism.
+The shell provisioner is bake-only. It runs preflight, dependencies, build,
+configuration, cleanup, final verification, and sanitization in that order.
+Packer stages non-secret JSON input and repository-owned assets, then promotes
+them into a root-owned build directory. The final verification runs after build
+package removal and checks the installed dynamic dependencies and module inventory.
+Sanitization removes staging and resets cloud-init/machine identity. Never run
+these phases as day-two configuration on a serving node. Runtime configuration
+assets live in `image/assets`; no provisioning framework is installed or required.
 
-For production acceptance, `AMI_POST_VALIDATION_SCRIPT` should additionally verify UDP, mutual TLS, PostgreSQL, FreeSWITCH SIP/ESL health, two-node cluster synchronization, established B2B call takeover, RTPEngine selection persistence, trusted-header behavior, and the media-recovery scenarios in `media-recovery.md`.
+This provisioning migration does not qualify the existing B2BUA policy for Sage.
+Its direct FreeSWITCH load integration must still be replaced by the gateway
+telemetry consumer, and established-dialog recovery needs live proof. The image
+is not a production-approved Sage artifact until those independent gates pass.
+
+For production acceptance, `AMI_POST_VALIDATION_SCRIPT` must verify UDP, mutual TLS,
+PostgreSQL, FreeSWITCH SIP and gateway telemetry, cluster synchronization,
+established B2B call takeover, RTPengine affinity, trusted-header behavior, and
+the scenarios in `media-recovery.md`. These are live gates, not current claims.
 
 ## Promotion
 

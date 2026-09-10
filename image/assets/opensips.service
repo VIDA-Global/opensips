@@ -18,7 +18,7 @@ LogsDirectory=opensips
 LogsDirectoryMode=0750
 ExecStartPre=/usr/sbin/opensips -C -f /run/opensips-secure/config/opensips.cfg
 ExecStart=/usr/bin/tini -- /usr/sbin/opensips -FE -f /run/opensips-secure/config/opensips.cfg
-ExecReload=/bin/kill -HUP $MAINPID
+# Configuration replacement requires a controlled restart; SIGHUP is ignored.
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s

@@ -16,17 +16,17 @@ VALUES
     (10, 1, 'bin:10.0.1.10:5566', 1, 3, 50, 'sip:10.0.1.10:5060', 'seed', 'OpenSIPS node A'),
     (10, 2, 'bin:10.0.1.11:5566', 1, 3, 50, 'sip:10.0.1.11:5060', NULL, 'OpenSIPS node B');
 
--- The ESL account should be ACL-restricted to the OpenSIPS nodes and granted
--- only the permissions needed for HEARTBEAT statistics. Do not reuse the
--- FreeSWITCH default event_socket password.
+-- No ESL URLs or passwords belong in OpenSIPS. These are explicit local-counter
+-- ceilings, not physical channel observations. This example is not production
+-- routing until the Sage eligibility and gateway telemetry consumer is qualified.
 INSERT INTO load_balancer
     (group_id, dst_uri, resources, probe_mode, attrs, description)
 VALUES
-    (1, 'sip:10.0.3.10:5060',
-        'channels=fs://opensips:REPLACE_ESL_PASSWORD_A@10.0.3.10:8021',
+    (1, 'sip:10.0.3.10:5070',
+        'channels=REPLACE_APPROVED_LIMIT_A',
         2, 'site=az-a', 'FreeSWITCH gateway A'),
-    (1, 'sip:10.0.3.11:5060',
-        'channels=fs://opensips:REPLACE_ESL_PASSWORD_B@10.0.3.11:8021',
+    (1, 'sip:10.0.3.11:5070',
+        'channels=REPLACE_APPROVED_LIMIT_B',
         2, 'site=az-b', 'FreeSWITCH gateway B');
 
 COMMIT;

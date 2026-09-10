@@ -1,5 +1,5 @@
 [Unit]
-Description=Render OpenSIPS runtime configuration from AWS Secrets Manager
+Description=Render validated OpenSIPS runtime configuration from AWS Secrets Manager
 Wants=network-online.target
 After=network-online.target
 Before=opensips.service

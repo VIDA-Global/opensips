@@ -10,6 +10,7 @@ locals {
     ManagedBy      = "packer"
     OpenSIPSCommit = var.opensips_source_commit
     SourceSHA256   = var.opensips_source_sha256
+    SourceAMI      = var.source_ami_id
     Version        = var.opensips_version
   })
 }
@@ -32,12 +33,13 @@ source "amazon-ebs" "opensips_arm64" {
   source_ami_filter {
     filters = {
       architecture        = "arm64"
+      image-id            = var.source_ami_id
       name                = var.source_ami_name
       root-device-type    = "ebs"
       state               = "available"
       virtualization-type = "hvm"
     }
-    most_recent = true
+    most_recent = false
     owners      = [var.source_ami_owner]
   }
 
@@ -75,23 +77,45 @@ build {
   name    = "opensips-arm64"
   sources = ["source.amazon-ebs.opensips_arm64"]
 
-  provisioner "file" {
-    source      = "${path.root}/../build/sources/opensips-${var.opensips_version}.tar.gz"
-    destination = "/tmp/opensips-source.tar.gz"
+  provisioner "shell" {
+    inline = ["install -d -m 0700 /tmp/opensips-image-upload /tmp/opensips-image-upload/assets /tmp/opensips-image-upload/provision"]
   }
 
-  provisioner "ansible" {
-    playbook_file = "${path.root}/../ansible/playbooks/ami.yml"
-    user          = var.ssh_username
-    extra_arguments = [
-      "--extra-vars",
-      "opensips_ami_version=${var.opensips_version} opensips_ami_source_commit=${var.opensips_source_commit} opensips_ami_source_sha256=${var.opensips_source_sha256}",
-      "--extra-vars",
-      "opensips_ami_modules=${jsonencode(var.opensips_modules)}"
-    ]
-    ansible_env_vars = [
-      "ANSIBLE_CONFIG=${path.root}/../ansible/ansible.cfg",
-      "ANSIBLE_HOST_KEY_CHECKING=False"
+  provisioner "file" {
+    source      = "${path.root}/../build/sources/opensips-${var.opensips_version}.tar.gz"
+    destination = "/tmp/opensips-image-upload/source.tar.gz"
+  }
+
+  provisioner "file" {
+    source      = "${path.root}/../assets/"
+    destination = "/tmp/opensips-image-upload/assets"
+  }
+  provisioner "file" {
+    source      = "${path.root}/../provision/"
+    destination = "/tmp/opensips-image-upload/provision"
+  }
+  provisioner "file" {
+    content = jsonencode({
+      version = var.opensips_version
+      commit  = var.opensips_source_commit
+      sha256  = var.opensips_source_sha256
+      modules = var.opensips_modules
+    })
+    destination = "/tmp/opensips-image-upload/input.json"
+  }
+  provisioner "shell" {
+    inline = [
+      "sudo install -d -o root -g root -m 0755 /opt/opensips-image-build",
+      "sudo cp -a /tmp/opensips-image-upload/. /opt/opensips-image-build/",
+      "sudo chown -R root:root /opt/opensips-image-build",
+      "sudo chmod -R go-w /opt/opensips-image-build",
+      "sudo bash /opt/opensips-image-build/provision/provision.sh preflight",
+      "sudo bash /opt/opensips-image-build/provision/provision.sh dependencies",
+      "sudo bash /opt/opensips-image-build/provision/provision.sh build",
+      "sudo bash /opt/opensips-image-build/provision/provision.sh configure",
+      "sudo bash /opt/opensips-image-build/provision/provision.sh cleanup",
+      "sudo bash /opt/opensips-image-build/provision/provision.sh verify",
+      "sudo bash /opt/opensips-image-build/provision/provision.sh sanitize"
     ]
   }
 
@@ -103,6 +127,7 @@ build {
       opensips_source_commit = var.opensips_source_commit
       opensips_source_sha256 = var.opensips_source_sha256
       opensips_version       = var.opensips_version
+      source_ami_id          = var.source_ami_id
     }
   }
 }

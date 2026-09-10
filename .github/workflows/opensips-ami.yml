@@ -95,11 +95,13 @@ jobs:
           SECURITY_GROUP_IDS: ${{ vars.AMI_BUILD_SECURITY_GROUP_IDS_JSON }}
           SUBNET_ID: ${{ vars.AMI_BUILD_SUBNET_ID }}
           VPC_ID: ${{ vars.AMI_BUILD_VPC_ID }}
+          SOURCE_AMI_ID: ${{ vars.AMI_UBUNTU_2404_ARM64_SOURCE_AMI_ID }}
         run: |
           set -euo pipefail
           jq -e 'type == "array" and length > 0 and all(.[]; type == "string")' <<<"$SECURITY_GROUP_IDS"
           {
             printf 'aws_region = %s\n' "$(jq -Rn --arg value "$AWS_REGION" '$value')"
+            printf 'source_ami_id = %s\n' "$(jq -Rn --arg value "$SOURCE_AMI_ID" '$value')"
             printf 'instance_type = "m9g.large"\n'
             printf 'vpc_id = %s\n' "$(jq -Rn --arg value "$VPC_ID" '$value')"
             printf 'subnet_id = %s\n' "$(jq -Rn --arg value "$SUBNET_ID" '$value')"

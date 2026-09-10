@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "ansible/roles/opensips_ami/files/opensips-runtime-config.py"
+MODULE_PATH = Path(__file__).resolve().parents[1] / "assets/opensips-runtime-config.py"
 sys.modules.setdefault("boto3", types.SimpleNamespace(client=lambda *args, **kwargs: None))
 SPEC = importlib.util.spec_from_file_location("opensips_runtime_config", MODULE_PATH)
 assert SPEC and SPEC.loader
@@ -54,7 +54,7 @@ class RuntimeConfigurationTests(unittest.TestCase):
         self.assertEqual(files["tls/private-key.pem"], "key")
 
     def test_checked_in_schema_v1_example_renders(self) -> None:
-        example = MODULE_PATH.parents[4] / "config/runtime-secret.json.example"
+        example = MODULE_PATH.parents[1] / "config/runtime-secret.json.example"
         secret = json.loads(example.read_text(encoding="utf-8"))
         files = RUNTIME.validate_secret(secret, TEMPLATE)
         self.assertNotIn("@@", files["opensips.cfg"])

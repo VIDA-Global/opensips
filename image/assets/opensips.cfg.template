@@ -1,5 +1,5 @@
 #### OpenSIPS 3.6.8 HA B2BUA policy
-# Installed by the AMI and rendered from the validated schema-v1 runtime secret.
+# Installed by shell provisioning and rendered from the schema-v1 runtime secret.
 
 #### Core
 log_level=2
@@ -28,7 +28,6 @@ loadmodule "tls_mgm.so"
 loadmodule "proto_tls.so"
 loadmodule "clusterer.so"
 loadmodule "dialog.so"
-loadmodule "freeswitch.so"
 loadmodule "load_balancer.so"
 loadmodule "uac_auth.so"
 loadmodule "b2b_entities.so"
@@ -58,13 +57,11 @@ modparam("dialog", "db_url", "@@DATABASE_URL@@")
 modparam("dialog", "db_mode", 1)
 modparam("dialog", "dialog_replication_cluster", @@CLUSTER_ID@@)
 
-#### FreeSWITCH live-capacity load balancing
-modparam("freeswitch", "event_heartbeat_interval", 20)
-modparam("freeswitch", "esl_connect_timeout", 3000)
-modparam("freeswitch", "esl_cmd_timeout", 3000)
+#### Local admission counters only until gateway telemetry integration is qualified.
+# Never connect OpenSIPS to ESL: the fixed Sage gateway is its sole owner.
 modparam("load_balancer", "db_url", "@@DATABASE_URL@@")
-modparam("load_balancer", "fetch_freeswitch_stats", 1)
-modparam("load_balancer", "initial_freeswitch_load", 1)
+modparam("load_balancer", "fetch_freeswitch_stats", 0)
+modparam("load_balancer", "initial_freeswitch_load", 0)
 modparam("load_balancer", "probing_interval", 10)
 modparam("load_balancer", "probing_method", "OPTIONS")
 modparam("load_balancer", "probing_from", "sip:health@@@ADVERTISED_IP@@")

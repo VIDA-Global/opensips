@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render a validated OpenSIPS runtime bundle from AWS Secrets Manager."""
+"""Render a validated OpenSIPS runtime bundle independently of image provisioning."""
 
 from __future__ import annotations
 

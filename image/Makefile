@@ -2,7 +2,6 @@ SHELL := /usr/bin/env bash
 .SHELLFLAGS := -euo pipefail -c
 
 PACKER_DIR := packer
-ANSIBLE_DIR := ansible
 BUILD_DIR := build
 VARS_FILE ?= packer/opensips.pkrvars.hcl
 
@@ -14,9 +13,9 @@ help:
 	@printf '%s\n' \
 	  'OpenSIPS ARM64 AMI targets:' \
 	  '  make init                         Install pinned Packer plugins' \
-	  '  make fmt                          Format Packer and Ansible YAML files' \
+	  '  make fmt                          Format Packer files' \
 	  '  make validate                     Run AWS-free static validation' \
-	  '  make lint                         Run shell, YAML, and Ansible linters' \
+	  '  make lint                         Run shell and workflow YAML linters' \
 	  '  make source                       Download and verify OpenSIPS source' \
 	  '  make test                         Run local contract tests' \
 	  '  make source-test MODE=<mode>      Run Linux source build, unit, or fuzz tests' \
@@ -28,7 +27,6 @@ help:
 
 init:
 	packer init $(PACKER_DIR)
-	ansible-galaxy collection install -r $(ANSIBLE_DIR)/requirements.yml
 
 fmt:
 	packer fmt -recursive $(PACKER_DIR)

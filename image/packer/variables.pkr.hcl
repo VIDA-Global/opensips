@@ -51,6 +51,15 @@ variable "source_ami_owner" {
   default     = "099720109477"
 }
 
+variable "source_ami_id" {
+  type        = string
+  description = "Exact approved regional Ubuntu 24.04 ARM64 base AMI."
+  validation {
+    condition     = can(regex("^ami-[a-f0-9]{8,17}$", var.source_ami_id))
+    error_message = "An immutable approved source AMI ID is required."
+  }
+}
+
 variable "source_ami_name" {
   type        = string
   description = "Canonical Ubuntu ARM64 source AMI name filter."
@@ -130,7 +139,6 @@ variable "opensips_modules" {
     "clusterer",
     "db_postgres",
     "dialog",
-    "freeswitch",
     "load_balancer",
     "maxfwd",
     "proto_bin",

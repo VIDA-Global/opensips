@@ -55,7 +55,7 @@ The build creates a temporary EC2 instance, key pair, encrypted volume, snapshot
 ## Prerequisites
 
 - Packer 1.11 or later.
-- Ansible and `ansible-lint`.
+- Bash, Python 3, ShellCheck, and yamllint; provisioning uses Packer shell/file provisioners only.
 - GNU Make, Python 3, `jq`, `curl`, `shellcheck`, and `yamllint`.
 - AWS CLI v2 for credentialed validation and promotion.
 - An ARM64 self-hosted GitHub runner with the label `opensips-ami`.
@@ -66,6 +66,11 @@ The build creates a temporary EC2 instance, key pair, encrypted volume, snapshot
 The current SSH design is transitional. Once Session Manager endpoints and instance policy exist, replace `ssh_interface = "private_ip"` with the reviewed Packer Session Manager communicator design.
 
 ## Local Build
+
+Supply an exact approved regional `source_ami_id`; the Canonical owner, ARM64,
+Ubuntu name, and EBS filters are additional checks, never a most-recent selection.
+CI obtains this value from `AMI_UBUNTU_2404_ARM64_SOURCE_AMI_ID` and records it in
+AMI tags and the Packer manifest.
 
 Create an ignored variable file from `packer/opensips.pkrvars.hcl.example`. Never commit real account or network values.
 
@@ -119,7 +124,7 @@ Changing an OpenSIPS version requires reviewing the canonical tag and commit, ca
 The default dynamic allowlist is:
 
 ```text
-b2b_entities b2b_logic clusterer db_postgres dialog freeswitch load_balancer
+b2b_entities b2b_logic clusterer db_postgres dialog load_balancer
 maxfwd proto_bin proto_hep proto_tls rr rtpengine sipmsgops sl textops
 tls_mgm tls_openssl tm topology_hiding tracer
 uac_auth
@@ -127,7 +132,12 @@ uac_auth
 
 UDP and TCP protocol support are part of the core transport build in this release line, but runtime policy must still activate the required `proto_udp.so` or `proto_tcp.so` handler. The installed dynamic inventory is checked exactly and stored at `/usr/share/opensips-ami/modules.txt`.
 
-`freeswitch` and `load_balancer` provide live ESL capacity-based FreeSWITCH selection. `proto_hep` and `tracer` provide HEP export to an external HOMER collector. The AMI does not install `sipcapture` or operate as a capture database.
+`load_balancer` currently provides configured local counters only. Direct
+FreeSWITCH ESL integration is disabled and its module is excluded; the fixed
+Sage ESL gateway is the sole ESL owner. Gateway physical-channel telemetry and
+Sage eligibility must be integrated before production routing is approved.
+`proto_hep` and `tracer` are available build modules, not proof of an active HEP
+exporter. The AMI does not install `sipcapture` or operate as a capture database.
 
 ## Runtime Contract
 
@@ -175,7 +185,7 @@ InstanceMetadataTags=enabled
 | `tls.private_key` | string | Non-empty PEM private key |
 | `tls.ca_bundle` | string | Non-empty PEM trust bundle used to verify carrier client certificates |
 
-Unknown, missing, duplicate, malformed, noncanonical, or out-of-range values fail closed. The helper uses OpenSSL to parse the certificate, unencrypted private key, and CA bundle and verifies that the certificate and key match. Trust purpose, certificate lifetime, revocation, hostname/SAN policy, and carrier identity remain deployment acceptance responsibilities. `opensips -C` checks syntax and route contexts but does not initialize PostgreSQL, FreeSWITCH ESL, RTPEngine, or listening sockets; those dependencies are proven only when `opensips.service` starts and deployment health checks pass.
+Unknown, missing, duplicate, malformed, noncanonical, or out-of-range values fail closed. The helper uses OpenSSL to parse the certificate, unencrypted private key, and CA bundle and verifies that the certificate and key match. Trust purpose, certificate lifetime, revocation, hostname/SAN policy, and carrier identity remain deployment acceptance responsibilities. `opensips -C` checks syntax and route contexts but does not initialize PostgreSQL, RTPengine, or listening sockets; those dependencies require live service checks.
 
 The rendered files are:
 
@@ -194,11 +204,19 @@ IAM, instance-tag mutation permissions, the secret resource policy, and the KMS 
 
 ## Default SIP Policy
 
-The installed template implements a two-node carrier ingress tier with UDP and mutual TLS, B2BUA topology isolation, PostgreSQL and cluster replication, weighted RTPEngine selection, and live FreeSWITCH ESL capacity. Each node receives a separate schema-v1 secret because `node_id`, `private_ip`, and `state_owner` differ. Both secrets normally share `cluster_id`, `advertised_ip`, database, carrier allowlists, RTPEngine nodes, and TLS trust policy.
+The installed prototype configures two-node carrier ingress with UDP and mutual
+TLS, B2BUA topology isolation, PostgreSQL/cluster replication, weighted RTPengine
+selection and local destination counters. It does not yet consume physical channel
+telemetry or prove existing-dialog recovery. Each node receives a separate
+schema-v1 secret because `node_id`, `private_ip`, and `state_owner` differ.
 
 The policy removes every case-insensitive carrier-provided `X-SAGE-*` header and supplies exactly one `X-SAGE-Source-IP` to the FreeSWITCH B2B leg using OpenSIPS `$si`. The value is the packet's remote network source, not a SIP header, Via value, forwarded header, or local listener address. Unlisted carrier source addresses receive `403`; initial INVITEs without SDP receive `488`.
 
-FreeSWITCH destinations and ESL credentials are intentionally not in the instance secret. The `load_balancer` module reads them from PostgreSQL so operators can change capacity targets without replacing instances. Apply the canonical schemas listed in `config/production-seed.postgres.sql.example`, replace every seed placeholder, restrict ESL to the OpenSIPS security group and ACL, and use a unique least-privilege ESL credential.
+FreeSWITCH destinations and local-counter ceilings are read from PostgreSQL.
+Never store ESL credentials or `fs://` resources there. The example requires
+explicit capacity placeholders to be replaced; these counters are not actual
+FreeSWITCH channel observations. Production also requires the Sage eligibility
+and direct authenticated gateway telemetry integration described in Sage's handoff.
 
 Package reviewed deployment values and TLS material without manually constructing JSON:
 

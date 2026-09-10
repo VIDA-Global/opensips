@@ -7,11 +7,7 @@ image_dir=$(dirname -- "$script_dir")
 readonly image_dir
 
 cd "$image_dir"
-shellcheck scripts/*.sh tests/integration/*.sh
-yamllint -c .yamllint ansible \
+shellcheck scripts/*.sh provision/*.sh tests/integration/*.sh
+yamllint -c .yamllint \
   ../.github/workflows/opensips-ami.yml \
   ../.github/workflows/unittests.yml
-(
-  cd ansible
-  ANSIBLE_CONFIG=ansible.cfg ansible-lint playbooks/ami.yml
-)
