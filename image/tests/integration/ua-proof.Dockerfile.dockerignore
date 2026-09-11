@@ -1,0 +1,8 @@
+**
+!build/
+!build/sources/
+!build/sources/opensips-3.6.8.tar.gz
+!tests/
+!tests/integration/
+!tests/integration/ua-proof.cfg
+!tests/integration/ua-proof.py

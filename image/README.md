@@ -67,6 +67,11 @@ The current SSH design is transitional. Once Session Manager endpoints and insta
 
 ## Local Build
 
+The [UA renegotiation proof](docs/ua-feasibility.md) documents a real,
+configuration-only two-leg SIP test and the remaining HA/media recovery gates.
+The [gateway-load selection policy](docs/load-selection.md) has deterministic
+freshness/reservation tests; its production HTTP and SIP wiring remains pending.
+
 Supply an exact approved regional `source_ami_id`; the Canonical owner, ARM64,
 Ubuntu name, and EBS filters are additional checks, never a most-recent selection.
 CI obtains this value from `AMI_UBUNTU_2404_ARM64_SOURCE_AMI_ID` and records it in
@@ -90,7 +95,7 @@ export AWS_PROFILE=opensips-ami-builder
 make -C image build VARS_FILE=packer/opensips.pkrvars.hcl
 ```
 
-Packer resolves the newest matching Canonical Noble ARM64 image at build time and records the exact source AMI in `build/packer-manifest.json`. Release records must retain that manifest.
+Packer requires an exact approved Canonical Noble ARM64 source AMI and records it in `build/packer-manifest.json`. Release records must retain that manifest.
 
 ## Configuration Variables
 

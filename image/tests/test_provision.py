@@ -34,6 +34,8 @@ class ProvisionTests(unittest.TestCase):
         self.assertEqual(phases, sorted(phases))
         unit = (ROOT / "assets/opensips.service").read_text()
         self.assertNotIn("ExecReload=", unit)
+        self.assertNotIn(" -FE ", unit)
+        self.assertIn("opensips -F -f", unit)
 
 
 if __name__ == "__main__":

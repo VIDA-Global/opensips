@@ -7,7 +7,7 @@ VARS_FILE ?= packer/opensips.pkrvars.hcl
 
 .DEFAULT_GOAL := help
 
-.PHONY: help init fmt validate lint source test source-test package-secret build inspect promote clean
+.PHONY: help init fmt validate lint source test source-test package-secret build inspect promote clean test-ua-proof
 
 help:
 	@printf '%s\n' \
@@ -42,6 +42,10 @@ source:
 
 test:
 	python3 -m unittest discover -s tests -p 'test_*.py'
+
+test-ua-proof: source
+	docker buildx build --platform linux/arm64 --file tests/integration/ua-proof.Dockerfile --load --tag sage-opensips:ua-proof .
+	docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges --user 65532:65532 --read-only --tmpfs /tmp:rw,nosuid,nodev,size=64m sage-opensips:ua-proof
 
 source-test:
 	@test -n "$${MODE:-}" || { printf 'MODE must be build, unit, or fuzz\n' >&2; exit 64; }
