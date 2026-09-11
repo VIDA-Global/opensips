@@ -7,7 +7,7 @@ VARS_FILE ?= packer/opensips.pkrvars.hcl
 
 .DEFAULT_GOAL := help
 
-.PHONY: help init fmt validate lint source test source-test package-secret build inspect promote clean test-ua-proof test-ua-postgres-proof
+.PHONY: help init fmt validate lint source test source-test package-secret build inspect promote clean proof-image test-load-https-proof test-ua-proof test-ua-postgres-proof
 
 help:
 	@printf '%s\n' \
@@ -19,6 +19,7 @@ help:
 	  '  make source                       Download and verify OpenSIPS source' \
 	  '  make test                         Run local contract tests' \
 	  '  make test-ua-postgres-proof        Probe UA crash recovery against isolated PostgreSQL' \
+	  '  make test-load-https-proof         Probe bounded direct HTTPS on an isolated network' \
 	  '  make source-test MODE=<mode>      Run Linux source build, unit, or fuzz tests' \
 	  '  make package-secret DEPLOYMENT=<file> CERT=<file> KEY=<file> CA=<file>' \
 	  '  make build VARS_FILE=<file>        Build the source-region AMI (uses AWS)' \
@@ -44,9 +45,14 @@ source:
 test:
 	python3 -m unittest discover -s tests -p 'test_*.py'
 
-test-ua-proof: source
+proof-image: source
 	docker buildx build --platform linux/arm64 --build-context b2b_entities=../modules/b2b_entities --file tests/integration/ua-proof.Dockerfile --load --tag sage-opensips:ua-proof .
+
+test-ua-proof: proof-image
 	docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges --user 65532:65532 --read-only --tmpfs /tmp:rw,nosuid,nodev,size=64m sage-opensips:ua-proof
+
+test-load-https-proof: proof-image
+	sh tests/integration/run-load-https-proof.sh
 
 test-ua-postgres-proof: test-ua-proof
 	for scenario in normal missing truncated version header-only flags expired; do sh tests/integration/run-ua-postgres-proof.sh "$$scenario"; done

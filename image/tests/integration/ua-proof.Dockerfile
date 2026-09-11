@@ -16,4 +16,5 @@ RUN printf '%s\n' 'b3e1ab4d82dce763bbd51c99a1733f133465fda8fe2591f86aec9c3eefaba
         cp "modules/$module/$module.so" /modules/; done \
     && cp opensips /usr/local/bin/opensips
 COPY tests/integration/ua-proof.cfg tests/integration/ua-proof.py /tests/
+COPY scripts/gateway_load_polling.py tests/integration/load-https-proof.py /tests/
 CMD ["python3", "/tests/ua-proof.py"]

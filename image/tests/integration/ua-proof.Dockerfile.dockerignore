@@ -8,3 +8,6 @@
 !tests/integration/ua-proof.py
 !provision/
 !provision/inputs.py
+!scripts/
+!scripts/gateway_load_polling.py
+!tests/integration/load-https-proof.py

@@ -33,9 +33,40 @@ by Packer and the production OpenSIPS routes do not call it yet.
 
 ## Integration Gates
 
+### Direct HTTPS and Placement Reader
+
+`scripts/gateway_load_polling.py` implements the direct HTTPS transport and the
+schema `1.1.0` placement-page reader. Each request resolves and checks every returned
+address against explicit role networks/ports, pins the connection, verifies the
+certificate and logical hostname, and sends the credential only in its header.
+Use separate client instances/scopes for Sage inventory and gateway load. There are
+no proxies, redirects, cookies or connection reuse. The fixed JSON GET contract
+requires Content-Length and rejects chunked/compressed/ambiguous responses.
+
+Requests have a whole-operation deadline and bounded headers/body. Capacity is
+immediate rather than a waiter queue. Timed-out system DNS retains its capacity slot
+until the underlying lookup completes, preventing successive timeouts from creating
+unbounded resolver work. TLS transport is aborted on incomplete closure/cancellation.
+The inventory reader accepts at most four pages and 256 node records, advances
+empty-page cursors, rejects duplicate/out-of-order records and foreign load-secret
+namespaces, and returns only a complete refresh. Its monotonic refresh-start time
+must be used when applying the relative eligibility leases.
+
+`make -C image test-load-https-proof` exercises real TLS on a disposable internal
+Docker network with synthetic credentials and a generated test-only certificate.
+It verifies CA trust, private-IP pinning, no redirects, body limits and stalled-peer
+timeout closure. It publishes no ports and removes its container/network on exit.
+The build requires registry access; the probe does not contact AWS or a live gateway.
+
+This module is not yet installed as a supervised production poller or connected to
+SIP reservation routes. Dynamic secret resolution, PostgreSQL-backed reservation
+authority and complete real gateway/SIP integration remain required.
+
+### Remaining Runtime Composition
+
 The caller must serialize access to the policy object and perform authenticated,
 byte/deadline-bounded HTTPS outside SIP processing. This file does not implement
-HTTP, endpoint discovery, credential resolution, SIP dialogs, cleanup callbacks or
+the HTTP loop, credential resolution, SIP dialogs, cleanup callbacks or
 an OpenSIPS-wide shared service. It must not receive ESL credentials or Sage's
 administrative inventory token.
 
