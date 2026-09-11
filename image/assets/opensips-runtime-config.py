@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import boto3
+from placement_config import validate_instance_scope, validate_placement
 
 IMDS_BASE = os.environ.get("OPENSIPS_IMDS_URL", "http://169.254.169.254/latest")
 RUNTIME_ROOT = Path(os.environ.get("OPENSIPS_RUNTIME_ROOT", "/run/opensips-secure/config"))
@@ -36,6 +37,7 @@ REQUIRED_PLACEHOLDERS = {
     "@@CARRIER_UDP_REJECT@@",
     "@@CARRIER_TLS_REJECT@@",
     "@@RTPENGINE_NODES@@",
+    "@@PLACEMENT_TOKEN@@",
 }
 SECRET_ARN_RE = re.compile(
     r"^arn:(?P<partition>aws(?:-us-gov|-cn)?):secretsmanager:"
@@ -184,9 +186,14 @@ def render_config(deployment: Any, template: str) -> str:
         "carrier_udp_ips",
         "carrier_tls_ips",
         "rtpengine_nodes",
+        "placement",
     }
     if not isinstance(deployment, dict) or set(deployment) != required:
-        raise ConfigurationError("deployment must contain exactly the supported schema-v1 fields")
+        raise ConfigurationError("deployment must contain exactly the supported schema-v2 fields")
+    try:
+        placement = validate_placement(deployment["placement"])
+    except ValueError:
+        raise ConfigurationError("invalid placement configuration") from None
     missing_placeholders = REQUIRED_PLACEHOLDERS - {item for item in REQUIRED_PLACEHOLDERS if item in template}
     if missing_placeholders:
         raise ConfigurationError("OpenSIPS policy template is missing required placeholders")
@@ -210,6 +217,7 @@ def render_config(deployment: Any, template: str) -> str:
         "@@CARRIER_UDP_REJECT@@": "(" + " && ".join(f"$si != {ip}" for ip in udp_ips) + ")",
         "@@CARRIER_TLS_REJECT@@": "(" + " && ".join(f"$si != {ip}" for ip in tls_ips) + ")",
         "@@RTPENGINE_NODES@@": validate_rtpengine_nodes(deployment["rtpengine_nodes"]),
+        "@@PLACEMENT_TOKEN@@": placement["service_token"],
     }
     rendered = template
     for placeholder, value in replacements.items():
@@ -233,10 +241,11 @@ def validate_secret(secret: dict[str, Any], template: str | None = None) -> dict
     if (
         set(secret) != {"schema_version", "deployment", "tls"}
         or type(secret.get("schema_version")) is not int
-        or secret["schema_version"] != 1
+        or secret["schema_version"] != 2
     ):
         raise ConfigurationError("configuration secret has an unsupported schema")
     files = {"opensips.cfg": render_config(secret["deployment"], template or read_template())}
+    files["placement.json"] = json.dumps(secret["deployment"]["placement"], sort_keys=True)
     tls = secret.get("tls")
     if not isinstance(tls, dict) or set(tls) != {"certificate", "private_key", "ca_bundle"}:
         raise ConfigurationError("tls must contain certificate, private_key, and ca_bundle")
@@ -374,7 +383,12 @@ def main() -> int:
     try:
         recover_interrupted_update()
         secret_arn, version_id, region, account_id = instance_identity()
-        files = validate_secret(get_secret(secret_arn, version_id, region, account_id))
+        secret = get_secret(secret_arn, version_id, region, account_id)
+        files = validate_secret(secret)
+        try:
+            validate_instance_scope(secret["deployment"]["placement"], region, account_id)
+        except ValueError:
+            raise ConfigurationError("placement load-secret scope does not match instance identity") from None
         previous = write_bundle(files)
         try:
             validate_tls_material()

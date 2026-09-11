@@ -1,0 +1,31 @@
+[Unit]
+Description=OpenSIPS PostgreSQL placement and direct gateway observations
+Requires=opensips-runtime-config.service
+After=network-online.target opensips-runtime-config.service
+Before=opensips.service
+
+[Service]
+Type=simple
+User=opensips
+Group=opensips
+UMask=0077
+Environment=PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /usr/local/lib/opensips-placement/placement_service.py --config /run/opensips-secure/config/placement.json
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=5
+KillMode=control-group
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

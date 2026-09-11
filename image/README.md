@@ -129,7 +129,7 @@ Changing an OpenSIPS version requires reviewing the canonical tag and commit, ca
 The default dynamic allowlist is:
 
 ```text
-b2b_entities b2b_logic clusterer db_postgres dialog load_balancer
+b2b_entities b2b_logic clusterer db_postgres dialog cfgutils json rest_client
 maxfwd proto_bin proto_hep proto_tls rr rtpengine sipmsgops sl textops
 tls_mgm tls_openssl tm topology_hiding tracer
 uac_auth
@@ -137,16 +137,17 @@ uac_auth
 
 UDP and TCP protocol support are part of the core transport build in this release line, but runtime policy must still activate the required `proto_udp.so` or `proto_tcp.so` handler. The installed dynamic inventory is checked exactly and stored at `/usr/share/opensips-ami/modules.txt`.
 
-`load_balancer` currently provides configured local counters only. Direct
-FreeSWITCH ESL integration is disabled and its module is excluded; the fixed
-Sage ESL gateway is the sole ESL owner. Gateway physical-channel telemetry and
-Sage eligibility must be integrated before production routing is approved.
+`opensips-placement.service` combines Sage's expiring eligibility projection with
+direct authenticated gateway physical-channel observations. PostgreSQL serializes
+reservations across OpenSIPS nodes; the local `load_balancer` counter path is removed.
+Direct FreeSWITCH ESL integration is excluded; the fixed Sage gateway is its sole
+owner. See [placement](docs/load-selection.md) for bounds and current test evidence.
 `proto_hep` and `tracer` are available build modules, not proof of an active HEP
 exporter. The AMI does not install `sipcapture` or operate as a capture database.
 
 ## Runtime Contract
 
-The AMI installs the reviewed HA B2BUA policy at `/etc/opensips/opensips.cfg.template`. The template is root-owned, is not a runnable configuration, and contains no deployment address, database credential, certificate, private key, FreeSWITCH credential, or RTPengine endpoint. The only supported runtime secret format is schema version 1. Arbitrary `opensips_config` text is rejected.
+The AMI installs the reviewed B2BUA policy at `/etc/opensips/opensips.cfg.template`. The template is root-owned, is not a runnable configuration, and contains no deployment address, database credential, certificate, private key, FreeSWITCH credential, or RTPengine endpoint. The supported runtime secret format is schema version 2. Arbitrary `opensips_config` text is rejected.
 
 At boot:
 
@@ -154,12 +155,12 @@ At boot:
 2. `opensips-runtime-config.service` reads only `OpenSIPSConfigSecretArn` and `OpenSIPSConfigSecretVersion`.
 3. The helper verifies that the ARN belongs to the instance account and region.
 4. The instance role retrieves only the IAM-authorized immutable secret version.
-5. The helper validates every schema-v1 field before substituting the fixed template.
+5. The helper validates every schema-v2 field before substituting the fixed template.
 6. It writes an atomic root:`opensips` runtime bundle under `/run/opensips-secure/config`.
 7. OpenSSL parses the certificate, private key, and CA bundle and verifies that the certificate and key match.
 8. OpenSIPS checks policy syntax and route function contexts with `opensips -C` as the service user.
 9. A failed render, cryptographic check, or policy parse restores the previous valid bundle and prevents startup.
-10. `opensips.service` starts only after successful validation.
+10. The placement service starts with a four-connection PostgreSQL pool and loopback-only API on port 8095; OpenSIPS uses it asynchronously for new-call selection. Missing/stale placement evidence rejects new calls.
 
 The required launch-template metadata settings are:
 
@@ -170,13 +171,13 @@ HttpPutResponseHopLimit=1
 InstanceMetadataTags=enabled
 ```
 
-### Schema Version 1
+### Schema Version 2
 
-`config/runtime-secret.json.example` shows the complete secret, while `config/deployment.json.example` is the non-secret input accepted by the packaging command. The top-level object must contain exactly `schema_version`, `deployment`, and `tls`.
+`config/runtime-secret.json.example` shows the complete secret, while `config/deployment.json.example` shows the deployment input accepted by the packaging command. Populated deployment JSON contains credentials and must remain private; local `config/*.json` inputs are ignored by Git. The top-level object must contain exactly `schema_version`, `deployment`, and `tls`.
 
 | Field | Type | Validation and purpose |
 | --- | --- | --- |
-| `schema_version` | integer | Must be exactly `1` |
+| `schema_version` | integer | Must be exactly `2` |
 | `deployment.node_id` | integer | Unique positive cluster node ID |
 | `deployment.cluster_id` | integer | Positive cluster ID shared by both nodes |
 | `deployment.private_ip` | string | Canonical IPv4 address used by UDP, TLS, BIN, and outbound UDP sockets |
@@ -186,6 +187,7 @@ InstanceMetadataTags=enabled
 | `deployment.carrier_udp_ips` | array | Non-empty, unique canonical IPv4 source allowlist for UDP |
 | `deployment.carrier_tls_ips` | array | Non-empty, unique canonical IPv4 source allowlist for mutual TLS |
 | `deployment.rtpengine_nodes` | array | Non-empty unique `udp:host:port` endpoints with integer weights from 1 through 1000 |
+| `deployment.placement` | object | Exact shared placement configuration: namespace, PostgreSQL DSN, distinct local-service/Sage-reader tokens, Sage HTTPS origin, gateway-load secret ARN prefix, inventory/gateway/SIP network and port scopes, and optional HTTPS/database CA paths |
 | `tls.certificate` | string | Non-empty PEM certificate chain |
 | `tls.private_key` | string | Non-empty PEM private key |
 | `tls.ca_bundle` | string | Non-empty PEM trust bundle used to verify carrier client certificates |
@@ -196,6 +198,7 @@ The rendered files are:
 
 ```text
 /run/opensips-secure/config/opensips.cfg
+/run/opensips-secure/config/placement.json
 /run/opensips-secure/config/tls/certificate.pem
 /run/opensips-secure/config/tls/private-key.pem
 /run/opensips-secure/config/tls/ca-bundle.pem
@@ -209,19 +212,23 @@ IAM, instance-tag mutation permissions, the secret resource policy, and the KMS 
 
 ## Default SIP Policy
 
-The installed prototype configures two-node carrier ingress with UDP and mutual
-TLS, B2BUA topology isolation, PostgreSQL/cluster replication, weighted RTPengine
-selection and local destination counters. It does not yet consume physical channel
-telemetry or prove existing-dialog recovery. Each node receives a separate
-schema-v1 secret because `node_id`, `private_ip`, and `state_owner` differ.
+The installed prototype configures carrier ingress with UDP and mutual TLS,
+B2BUA topology isolation, PostgreSQL/cluster replication, weighted RTPengine
+selection and PostgreSQL-backed channel reservations. Each node receives a separate
+schema-v2 secret; placement namespaces agree across the cohort, while local-service
+tokens are node-specific. A successful placement is not proof of established-dialog
+takeover or complete SIPREC/DTLS/media integration.
 
 The policy removes every case-insensitive carrier-provided `X-SAGE-*` header and supplies exactly one `X-SAGE-Source-IP` to the FreeSWITCH B2B leg using OpenSIPS `$si`. The value is the packet's remote network source, not a SIP header, Via value, forwarded header, or local listener address. Unlisted carrier source addresses receive `403`; initial INVITEs without SDP receive `488`.
 
-FreeSWITCH destinations and local-counter ceilings are read from PostgreSQL.
-Never store ESL credentials or `fs://` resources there. The example requires
-explicit capacity placeholders to be replaced; these counters are not actual
-FreeSWITCH channel observations. Production also requires the Sage eligibility
-and direct authenticated gateway telemetry integration described in Sage's handoff.
+FreeSWITCH destinations and configured channel ceilings come from Sage's native
+directory projection. Load comes directly from the matching gateway incarnation.
+Apply `/usr/share/opensips-ami/placement-schema.sql` with the placement database owner
+before boot, then grant the runtime role only schema usage and table DML. No runtime
+DDL or Sage tenant-table access is needed. Never store ESL credentials or `fs://`
+resources there. Preserve reservation tombstones: expiration releases capacity but
+does not allow an allocation ID to create a second call. There is no automated
+tombstone archival policy yet.
 
 Package reviewed deployment values and TLS material without manually constructing JSON:
 

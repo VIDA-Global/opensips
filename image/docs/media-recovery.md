@@ -2,9 +2,9 @@
 
 ## Supported HA Boundary
 
-The image contains `proto_bin`, `clusterer`, `dialog`, `b2b_entities`, and `b2b_logic`. The installed policy fixes listeners, database modes, and B2B routes. Schema-v1 values provide node identity, advertised and private addresses, and the database URL; PostgreSQL `clusterer` rows provide private BIN peer topology. The deployment must still provide frontend flow steering, network isolation, monitoring, and tested endpoint behavior.
+The image contains `proto_bin`, `clusterer`, `dialog`, `b2b_entities`, and `b2b_logic`. The installed policy fixes listeners, database modes, and B2B routes. Schema-v2 values provide node identity, advertised/private addresses, database URLs and placement-service configuration; PostgreSQL `clusterer` rows provide private BIN peer topology. PostgreSQL is authoritative for durable state. Replication is a recovery mechanism, not an alternative authority. Frontend steering, exclusive SIP ownership, network isolation and endpoint behavior still require qualification.
 
-The supported baseline claim is:
+The intended replicated-dialog baseline, still requiring end-to-end qualification, is:
 
 > A surviving OpenSIPS node can provide new-call service and best-effort routing for a replicated confirmed dialog when its original RTPengine and SIP endpoints remain reachable.
 
@@ -25,15 +25,17 @@ A fresh offer/answer exchange can establish replacement media, but it changes th
 Automatic recovery requires all of the following outside this AMI:
 
 - Every call is anchored through a reviewed `b2b_entities` and `b2b_logic` scenario.
-- B2B state is replicated to a healthy OpenSIPS peer.
-- The deployment stores the selected RTPengine identity and current negotiated SDP state in replicated B2B/dialog state.
+- B2B state is durably stored in PostgreSQL and a qualified peer can reconstruct it.
+- PostgreSQL retains the selected RTPengine identity, negotiated SDP and the recovery operation; replicated copies cannot supersede committed ownership.
 - At least one replacement RTPengine is healthy and reachable from the surviving OpenSIPS node.
 - Both SIP endpoints permit proxy/B2BUA-originated re-INVITEs and the resulting codec, ICE, and SRTP changes.
 - The B2BUA serializes offer/answer operations and handles `491 Request Pending` glare.
 - Ingress traffic reaches the surviving node using stable advertised identities.
 - Monitoring can distinguish control failure, media failure, renegotiation progress, rollback, and call termination.
 
-For stronger continuity, prefer RTPengine-level HA that preserves or reconstructs media sessions. B2BUA renegotiation remains a recovery fallback, not a substitute for relay HA.
+RTPengine provides active-active capacity with per-call affinity and planned drain.
+Unplanned loss requires qualified offer/answer renegotiation and may interrupt media;
+there is no Redis-backed or transparent media-state takeover in this design.
 
 ## Recovery State Machine
 
@@ -57,7 +59,7 @@ Any pending state
 The owner must:
 
 1. Confirm failure using bounded control probes and avoid reacting to one transient timeout.
-2. Fence concurrent recovery for the same B2B session using replicated ownership plus an external partition policy.
+2. Fence concurrent recovery for the same B2B session using PostgreSQL ownership and a qualified partition/egress-fencing policy.
 3. Reserve a replacement relay without deleting the original session.
 4. Generate an offer acceptable to the first leg and persist the pending CSeq and operation identity.
 5. Apply the accepted SDP to the second leg and wait for its final answer.

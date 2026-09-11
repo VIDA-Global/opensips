@@ -7,6 +7,8 @@ VARS_FILE ?= packer/opensips.pkrvars.hcl
 
 .DEFAULT_GOAL := help
 
+.PHONY: test-placement-postgres-proof
+
 .PHONY: help init fmt validate lint source test source-test package-secret build inspect promote clean proof-image test-load-https-proof test-ua-proof test-ua-postgres-proof
 
 help:
@@ -20,6 +22,7 @@ help:
 	  '  make test                         Run local contract tests' \
 	  '  make test-ua-postgres-proof        Probe UA crash recovery against isolated PostgreSQL' \
 	  '  make test-load-https-proof         Probe bounded direct HTTPS on an isolated network' \
+	  '  make test-placement-postgres-proof Probe distributed SQL reservations on an isolated network' \
 	  '  make source-test MODE=<mode>      Run Linux source build, unit, or fuzz tests' \
 	  '  make package-secret DEPLOYMENT=<file> CERT=<file> KEY=<file> CA=<file>' \
 	  '  make build VARS_FILE=<file>        Build the source-region AMI (uses AWS)' \
@@ -53,6 +56,9 @@ test-ua-proof: proof-image
 
 test-load-https-proof: proof-image
 	sh tests/integration/run-load-https-proof.sh
+
+test-placement-postgres-proof: proof-image
+	sh tests/integration/run-placement-postgres-proof.sh
 
 test-ua-postgres-proof: test-ua-proof
 	for scenario in normal missing truncated version header-only flags expired; do sh tests/integration/run-ua-postgres-proof.sh "$$scenario"; done

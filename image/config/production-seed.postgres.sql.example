@@ -5,7 +5,9 @@
 --   scripts/postgres/clusterer-create.sql
 --   scripts/postgres/dialog-create.sql
 --   scripts/postgres/b2b-create.sql
---   scripts/postgres/load_balancer-create.sql
+-- Apply image/assets/placement-schema.sql in the placement database using its owner.
+-- Grant the runtime placement role USAGE on opensips_placement and SELECT/INSERT/
+-- UPDATE/DELETE on its tables. No runtime DDL or Sage tenant-table grants are required.
 -- Replace every address and credential before executing this transaction.
 
 BEGIN;
@@ -16,17 +18,7 @@ VALUES
     (10, 1, 'bin:10.0.1.10:5566', 1, 3, 50, 'sip:10.0.1.10:5060', 'seed', 'OpenSIPS node A'),
     (10, 2, 'bin:10.0.1.11:5566', 1, 3, 50, 'sip:10.0.1.11:5060', NULL, 'OpenSIPS node B');
 
--- No ESL URLs or passwords belong in OpenSIPS. These are explicit local-counter
--- ceilings, not physical channel observations. This example is not production
--- routing until the Sage eligibility and gateway telemetry consumer is qualified.
-INSERT INTO load_balancer
-    (group_id, dst_uri, resources, probe_mode, attrs, description)
-VALUES
-    (1, 'sip:10.0.3.10:5070',
-        'channels=REPLACE_APPROVED_LIMIT_A',
-        2, 'site=az-a', 'FreeSWITCH gateway A'),
-    (1, 'sip:10.0.3.11:5070',
-        'channels=REPLACE_APPROVED_LIMIT_B',
-        2, 'site=az-b', 'FreeSWITCH gateway B');
+-- No fixed FreeSWITCH destination rows or ESL credentials are seeded here.
+-- The placement observer follows Sage eligibility and direct gateway measurements.
 
 COMMIT;

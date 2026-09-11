@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "assets/opensips-runtime-config.py"
+sys.path.insert(0, str(MODULE_PATH.parent))
 sys.modules.setdefault("boto3", types.SimpleNamespace(client=lambda *args, **kwargs: None))
 SPEC = importlib.util.spec_from_file_location("opensips_runtime_config", MODULE_PATH)
 assert SPEC and SPEC.loader
@@ -20,7 +21,7 @@ TEMPLATE = (MODULE_PATH.parent / "opensips.cfg.template").read_text(encoding="ut
 
 def valid_secret() -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "deployment": {
             "node_id": 1,
             "cluster_id": 10,
@@ -34,6 +35,7 @@ def valid_secret() -> dict:
                 {"url": "udp:10.0.2.10:2223", "weight": 10},
                 {"url": "udp:rtp-b.internal.example:2223", "weight": 5},
             ],
+            "placement": json.loads((MODULE_PATH.parents[1] / "config/deployment.json.example").read_text())["placement"],
         },
         "tls": {"certificate": "cert", "private_key": "key", "ca_bundle": "ca"},
     }
@@ -53,7 +55,7 @@ class RuntimeConfigurationTests(unittest.TestCase):
         files = RUNTIME.validate_secret(valid_secret(), TEMPLATE)
         self.assertEqual(files["tls/private-key.pem"], "key")
 
-    def test_checked_in_schema_v1_example_renders(self) -> None:
+    def test_checked_in_schema_v2_example_renders(self) -> None:
         example = MODULE_PATH.parents[1] / "config/runtime-secret.json.example"
         secret = json.loads(example.read_text(encoding="utf-8"))
         files = RUNTIME.validate_secret(secret, TEMPLATE)
@@ -65,8 +67,8 @@ class RuntimeConfigurationTests(unittest.TestCase):
         with self.assertRaises(RUNTIME.ConfigurationError):
             RUNTIME.validate_secret(secret, TEMPLATE)
 
-    def test_only_schema_version_one_is_accepted(self) -> None:
-        for value in (2, True, 1.0, "1"):
+    def test_only_schema_version_two_is_accepted(self) -> None:
+        for value in (1, True, 2.0, "2"):
             secret = valid_secret()
             secret["schema_version"] = value
             with self.subTest(value=value), self.assertRaises(RUNTIME.ConfigurationError):

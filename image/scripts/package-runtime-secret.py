@@ -12,6 +12,9 @@ import stat
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "assets"))
+from placement_config import validate_placement
+
 
 MAX_SECRET_BYTES = 65536
 DEPLOYMENT_FIELDS = {
@@ -24,6 +27,7 @@ DEPLOYMENT_FIELDS = {
     "carrier_udp_ips",
     "carrier_tls_ips",
     "rtpengine_nodes",
+    "placement",
 }
 
 
@@ -62,7 +66,8 @@ def read_nonempty(path: Path, label: str) -> str:
 
 def validate_deployment(deployment: dict[str, object]) -> None:
     if set(deployment) != DEPLOYMENT_FIELDS:
-        raise ValueError("deployment configuration must contain exactly the schema-v1 fields")
+        raise ValueError("deployment configuration must contain exactly the schema-v2 fields")
+    validate_placement(deployment["placement"])
     for field in ("node_id", "cluster_id"):
         value = deployment[field]
         if type(value) is not int or not 1 <= value <= 2147483647:
@@ -131,7 +136,7 @@ def read_deployment(path: Path) -> dict[str, object]:
 
 def package_secret(deployment: Path, certificate: Path, private_key: Path, ca_bundle: Path) -> bytes:
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "deployment": read_deployment(deployment),
         "tls": {
             "certificate": read_nonempty(certificate, "TLS certificate"),
@@ -148,7 +153,7 @@ def package_secret(deployment: Path, certificate: Path, private_key: Path, ca_bu
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Write a compact schema-v1 OpenSIPS runtime secret to stdout."
+        description="Write a compact schema-v2 OpenSIPS runtime secret to stdout."
     )
     parser.add_argument("deployment", type=Path)
     parser.add_argument("certificate", type=Path)

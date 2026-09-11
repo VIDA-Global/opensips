@@ -2,14 +2,15 @@
 Description=OpenSIPS SIP server
 Documentation=https://www.opensips.org/Documentation/Manual-3-6
 Requires=opensips-runtime-config.service
-After=network-online.target opensips-runtime-config.service
-Wants=network-online.target
+After=network-online.target opensips-runtime-config.service opensips-placement.service
+Wants=network-online.target opensips-placement.service
 
 [Service]
 Type=simple
 User=opensips
 Group=opensips
 UMask=0027
+UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
 RuntimeDirectory=opensips
 RuntimeDirectoryMode=0750
 StateDirectory=opensips

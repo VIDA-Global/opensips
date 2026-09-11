@@ -109,7 +109,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client._active, 0)
 
     async def test_every_dns_address_must_be_approved_before_credentials_are_sent(self) -> None:
-        for address in ("127.0.0.1", "169.254.169.254", "10.2.0.1", "224.0.0.1", "::1"):
+        for address in ("127.0.0.1", "169.254.169.254", "10.2.0.1", "224.0.0.1", "::1", "::ffff:169.254.169.254"):
             self.resolve_mock.return_value = [*self.addresses, (socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 443))]
             with self.assertRaises(HTTP.ObservationUnavailable):
                 await self.get()

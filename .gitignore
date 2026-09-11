@@ -13,6 +13,7 @@ cscope*
 /opensips
 /debian
 /image/build/
+/image/config/*.json
 /image/packer/*.pkrvars.hcl
 !/image/packer/*.pkrvars.hcl.example
 /curses.out

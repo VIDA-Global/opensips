@@ -8,6 +8,12 @@
       "Resource": "${OPENSIPS_CONFIG_SECRET_ARN}"
     },
     {
+      "Sid": "ReadGatewayLoadCredentials",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "${OPENSIPS_LOAD_SECRET_PREFIX_ARN}*"
+    },
+    {
       "Sid": "DecryptOpenSipsConfiguration",
       "Effect": "Allow",
       "Action": "kms:Decrypt",

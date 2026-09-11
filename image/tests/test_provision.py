@@ -18,12 +18,14 @@ SPEC.loader.exec_module(INPUTS)
 class ProvisionTests(unittest.TestCase):
     def test_non_secret_inputs_reject_malformed_and_duplicate_values(self) -> None:
         good = {"version": "3.6.8", "commit": "a" * 40, "sha256": "b" * 64,
-                "modules": ["tm", "sl"], "ua_sources": {name: "c" * 64 for name in INPUTS.UA_FILES}}
+                "modules": ["tm", "sl"], "ua_sources": {name: "c" * 64 for name in INPUTS.UA_FILES},
+                "placement_sources": {name: "d" * 64 for name in INPUTS.PLACEMENT_FILES}}
         self.assertEqual(INPUTS.validate(good), good)
         for bad in ([], {**good, "token": "unexpected"}, {**good, "commit": "main"},
                     {**good, "modules": []}, {**good, "modules": ["tm", "tm"]},
                     {**good, "modules": ["../escape"]}, {**good, "modules": [None]},
                     {**good, "ua_sources": {}},
+                    {**good, "placement_sources": {}},
                     {**good, "ua_sources": {name: "bad" for name in INPUTS.UA_FILES}}):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 INPUTS.validate(bad)

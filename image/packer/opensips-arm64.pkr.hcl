@@ -5,6 +5,13 @@ locals {
     for name in ["b2b_entities.c", "ua_api.c", "ua_api.h", "ua_storage.c"] :
     name => filesha256("${path.root}/../../modules/b2b_entities/${name}")
   }
+  placement_sources = merge({
+    for name in ["gateway_load_polling", "gateway_load_selection", "placement_store", "placement_observer", "placement_service", "placement_secret"] :
+    "placement/${name}.py" => filesha256("${path.root}/../scripts/${name}.py")
+    }, {
+    for name in ["placement_config.py", "placement-schema.sql", "opensips.cfg.template", "opensips-placement.service"] :
+    "assets/${name}" => filesha256("${path.root}/../assets/${name}")
+  })
   common_tags = merge(var.additional_tags, {
     Application    = var.application_name
     Architecture   = local.architecture
@@ -82,7 +89,7 @@ build {
   sources = ["source.amazon-ebs.opensips_arm64"]
 
   provisioner "shell" {
-    inline = ["install -d -m 0700 /tmp/opensips-image-upload /tmp/opensips-image-upload/assets /tmp/opensips-image-upload/provision /tmp/opensips-image-upload/ua-overrides"]
+    inline = ["install -d -m 0700 /tmp/opensips-image-upload /tmp/opensips-image-upload/assets /tmp/opensips-image-upload/provision /tmp/opensips-image-upload/ua-overrides /tmp/opensips-image-upload/placement"]
   }
 
   provisioner "file" {
@@ -99,12 +106,37 @@ build {
     destination = "/tmp/opensips-image-upload/provision"
   }
   provisioner "file" {
+    source      = "${path.root}/../scripts/gateway_load_polling.py"
+    destination = "/tmp/opensips-image-upload/placement/gateway_load_polling.py"
+  }
+  provisioner "file" {
+    source      = "${path.root}/../scripts/gateway_load_selection.py"
+    destination = "/tmp/opensips-image-upload/placement/gateway_load_selection.py"
+  }
+  provisioner "file" {
+    source      = "${path.root}/../scripts/placement_store.py"
+    destination = "/tmp/opensips-image-upload/placement/placement_store.py"
+  }
+  provisioner "file" {
+    source      = "${path.root}/../scripts/placement_observer.py"
+    destination = "/tmp/opensips-image-upload/placement/placement_observer.py"
+  }
+  provisioner "file" {
+    source      = "${path.root}/../scripts/placement_service.py"
+    destination = "/tmp/opensips-image-upload/placement/placement_service.py"
+  }
+  provisioner "file" {
+    source      = "${path.root}/../scripts/placement_secret.py"
+    destination = "/tmp/opensips-image-upload/placement/placement_secret.py"
+  }
+  provisioner "file" {
     content = jsonencode({
-      version    = var.opensips_version
-      commit     = var.opensips_source_commit
-      sha256     = var.opensips_source_sha256
-      modules    = var.opensips_modules
-      ua_sources = local.ua_sources
+      version           = var.opensips_version
+      commit            = var.opensips_source_commit
+      sha256            = var.opensips_source_sha256
+      modules           = var.opensips_modules
+      ua_sources        = local.ua_sources
+      placement_sources = local.placement_sources
     })
     destination = "/tmp/opensips-image-upload/input.json"
   }
@@ -144,12 +176,13 @@ build {
     output     = "${path.root}/../build/packer-manifest.json"
     strip_path = true
     custom_data = {
-      architecture           = local.architecture
-      opensips_source_commit = var.opensips_source_commit
-      opensips_source_sha256 = var.opensips_source_sha256
-      opensips_version       = var.opensips_version
-      source_ami_id          = var.source_ami_id
-      ua_source_sha256       = sha256(jsonencode(local.ua_sources))
+      architecture            = local.architecture
+      opensips_source_commit  = var.opensips_source_commit
+      opensips_source_sha256  = var.opensips_source_sha256
+      opensips_version        = var.opensips_version
+      source_ami_id           = var.source_ami_id
+      ua_source_sha256        = sha256(jsonencode(local.ua_sources))
+      placement_source_sha256 = sha256(jsonencode(local.placement_sources))
     }
   }
 }

@@ -62,7 +62,22 @@ PostgreSQL, RTPengine control, or ESL to carrier/public networks.
 
 ## Default Policy Deployment
 
-The AMI installs `/etc/opensips/opensips.cfg.template`; operators do not supply arbitrary OpenSIPS text. Create one schema-v1 deployment object per node from `config/deployment.json.example`. Give each node a unique `node_id` and `private_ip`. Set one node's `state_owner` to `active` and the other's to `backup`. Keep `cluster_id`, `advertised_ip`, database, carrier allowlists, RTPEngine nodes, and TLS policy equivalent. The frontend must preserve SIP flow affinity and deliver subsequent dialog traffic to a node that can access replicated B2B state.
+The AMI installs `/etc/opensips/opensips.cfg.template`; operators do not supply arbitrary OpenSIPS text. Create one schema-v2 deployment object per node from `config/deployment.json.example`. Give each node a unique `node_id`, `private_ip` and placement service token. Keep the placement namespace shared across the cohort. Set the existing B2B cluster `state_owner` fields as required by the reviewed topology; these tags are not the placement observer lease. Keep `cluster_id`, advertised identity, carrier allowlists, RTPengine nodes and TLS policy equivalent. The frontend must preserve SIP flow affinity; established-dialog takeover still requires its own qualification.
+
+Before starting the service, apply the installed `placement-schema.sql` in its
+PostgreSQL database with owner credentials. Give the runtime role schema USAGE and
+table SELECT/INSERT/UPDATE/DELETE, without DDL or Sage tenant-table authority. The
+service requires verified PostgreSQL TLS and explicit credentials; configure
+`database_ca_bundle` for the database issuer and `ca_bundle` for its HTTPS peers.
+The instance role reads the configured gateway-load secret namespace using exact
+version IDs, independently of the configuration secret. Grant the corresponding
+KMS decrypt key and keep control/ESL namespaces excluded.
+
+Use `systemctl status opensips-placement` for service health and bounded fixed-message
+logs for observation failures. The authenticated loopback `/readyz` proves PostgreSQL
+access, not spare capacity or media health. Secret or configuration changes require
+a controlled service restart after draining. Gateway credential versions are discovered
+through refreshed Sage metadata and evict the prior cached version automatically.
 
 From a checkout at the exact OpenSIPS source commit recorded by the AMI, apply the repository-root PostgreSQL schema files named in `config/production-seed.postgres.sql.example`, then apply its reviewed cluster and FreeSWITCH rows. These schema files are deployment inputs and are not retained in the baked AMI. Use one seed node per cluster. Confirm that both cluster nodes report the B2B entity and load-balancer replication capabilities before admitting traffic.
 
@@ -79,7 +94,7 @@ Before production admission, verify all of the following in a deployment-owned S
 - Spoofed and mixed-case `X-SAGE-*` headers never reach FreeSWITCH.
 - FreeSWITCH receives one `X-SAGE-Source-IP` containing the carrier packet's `$si` value.
 - Untrusted source addresses and invalid TLS clients receive no routing privileges.
-- Validate physical-channel selection only after the direct gateway telemetry consumer is implemented; local dialog counters are not physical load. The current example does not retry a B2B setup on another FreeSWITCH.
+- The native policy uses direct gateway observations and PostgreSQL pending reservations. Qualify it with real FreeSWITCH physical load and burst arrivals; synthetic SIP placement is not capacity evidence. An uncertain B2B setup is not retried on a different destination under the same allocation ID.
 - The stored RTPEngine selection never changes; any fallback allocation attempted internally by the module is detected, deleted, and rejected.
 - OpenSIPS node replacement preserves confirmed B2B state within the documented HA boundary.
 - RTPEngine renegotiation failure is rejected without moving media; monitoring can terminate the full tuple through `b2b_terminate_call` when policy requires hard failure.

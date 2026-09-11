@@ -12,7 +12,7 @@ IMAGE_ROOT = Path(__file__).resolve().parents[1]
 class ImageContractTests(unittest.TestCase):
     EXPECTED_MODULES = {
         "b2b_entities", "b2b_logic", "clusterer", "db_postgres", "dialog",
-        "load_balancer", "maxfwd", "proto_bin", "proto_hep", "proto_tls", "rr", "rtpengine",
+        "cfgutils", "json", "rest_client", "maxfwd", "proto_bin", "proto_hep", "proto_tls", "rr", "rtpengine",
         "sipmsgops", "sl", "textops", "tls_mgm", "tls_openssl", "tm", "topology_hiding",
         "tracer", "uac_auth",
     }
@@ -59,11 +59,11 @@ class ImageContractTests(unittest.TestCase):
         self.assertEqual(hcl_modules, self.EXPECTED_MODULES)
         self.assertLessEqual(loaded_modules, self.EXPECTED_MODULES | core_protocols)
         self.assertNotIn("freeswitch", loaded_modules)
-        self.assertIn('modparam("load_balancer", "fetch_freeswitch_stats", 0)', config)
+        self.assertIn('http://127.0.0.1:8095/v1/reservations', config)
         seed = (IMAGE_ROOT / "config/production-seed.postgres.sql.example").read_text()
         self.assertNotIn("fs://", seed)
         self.assertNotIn(":8021", seed)
-        self.assertIn("load_balancer", loaded_modules)
+        self.assertNotIn("load_balancer", loaded_modules)
 
     def test_production_example_replaces_spoofed_sage_headers(self) -> None:
         config = (
@@ -96,6 +96,7 @@ class ImageContractTests(unittest.TestCase):
             "${VALIDATION_INSTANCE_ROLE_ARN}": "arn:aws:iam::123456789012:role/validator-instance",
             "${ALL_PROMOTION_KMS_KEY_ARNS_JSON}": '["arn:aws:kms:us-west-2:123456789012:key/example"]',
             "${OPENSIPS_CONFIG_SECRET_ARN}": "arn:aws:secretsmanager:us-east-2:123456789012:secret:opensips",
+            "${OPENSIPS_LOAD_SECRET_PREFIX_ARN}": "arn:aws:secretsmanager:us-east-2:123456789012:secret:gateway-load/",
             "${SECRETS_KMS_KEY_ARN}": "arn:aws:kms:us-east-2:123456789012:key/secrets",
         }
         for template_path in (IMAGE_ROOT / "iam").glob("*.json.tmpl"):

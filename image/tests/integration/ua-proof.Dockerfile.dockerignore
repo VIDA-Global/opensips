@@ -10,4 +10,14 @@
 !provision/inputs.py
 !scripts/
 !scripts/gateway_load_polling.py
+!scripts/placement_store.py
+!scripts/placement_service.py
+!scripts/placement_secret.py
+!scripts/placement_observer.py
+!scripts/gateway_load_selection.py
 !tests/integration/load-https-proof.py
+!tests/integration/placement-postgres-proof.py
+!assets/
+!assets/placement-schema.sql
+!assets/placement_config.py
+!assets/opensips.cfg.template

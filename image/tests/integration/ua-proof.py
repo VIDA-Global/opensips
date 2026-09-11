@@ -107,9 +107,31 @@ def verify_expired_sessions(caller, backend):
     print("Expired PostgreSQL UA sessions terminated on both legs without lifetime renewal", flush=True)
 
 
-def run(verify_persistence=False, postgres=False, state_case="normal"):
+def run(verify_persistence=False, postgres=False, state_case="normal", placement_port=None, expect_rejection=None):
     log = Path("/tmp/ua-proof.log")
     config = Path("/tests/ua-proof.cfg")
+    if placement_port is not None:
+        routes = Path("/tests/opensips.cfg.template").read_text().split("# BEGIN POSTGRES PLACEMENT ROUTES", 1)[1].split("# END POSTGRES PLACEMENT ROUTES", 1)[0]
+        routes = routes.replace("@@PLACEMENT_TOKEN@@", "1"*64).replace("127.0.0.1:8095", f"127.0.0.1:{placement_port}")
+        contents = config.read_text().replace("route(UA_SETUP);", "route(SAGE_SELECT);")
+        contents = contents.replace('mi("ua_session_list", $var(ua));',
+                                    'append_to_reply("X-Proof-Placement-Pending: $shv(placement_active)\\r\\n");\n'
+                                    'mi("ua_session_list", $var(ua));')
+        contents = contents.replace('cache_store("local", "client:$var(client)", "yes", 60);',
+                                    'cache_store("local", "client:$var(client)", "yes", 60);\n'
+                                    'cache_store("local", "allocation:$var(client)", "$avp(sage_allocation)", 60);')
+        contents = contents.replace('$var(key) = $param(key);',
+                                    '$var(key) = $param(key);\n'
+                                    'if ($param(event_type) == "ANSWERED" && $param(method) == "INVITE" &&\n'
+                                    '    cache_fetch("local", "allocation:$var(key)", $var(notify_id))) {\n'
+                                    '    $var(notify_action) = "confirm"; route(SAGE_NOTIFY);\n}\n')
+        contents = contents.replace('route {', 'loadmodule "rest_client.so"\nloadmodule "json.so"\nloadmodule "cfgutils.so"\n'
+                                    'modparam("rest_client", "max_async_transfers", 64)\n'
+                                    'modparam("rest_client", "max_transfer_size", 4)\n'
+                                    'modparam("rest_client", "connection_timeout", 1)\n'
+                                    'modparam("rest_client", "curl_timeout", 3)\nroute {', 1)
+        config = Path("/tmp/ua-placement.cfg")
+        config.write_text(contents + routes + "\nroute[SAGE_SETUP] { route(UA_SETUP); exit; }\n")
     if verify_persistence or postgres:
         if postgres:
             # Fixed synthetic credentials, reachable only on the wrapper's internal network.
@@ -138,7 +160,7 @@ def run(verify_persistence=False, postgres=False, state_case="normal"):
     caller = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     backend = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     caller.bind(("127.0.0.1", 15062))
-    backend.bind(("127.0.0.1", 15064))
+    backend.bind(("0.0.0.0" if placement_port is not None else "127.0.0.1", 15064))
     caller.settimeout(2)
     backend.settimeout(2)
     destination = ("127.0.0.1", 15060)
@@ -176,7 +198,13 @@ def run(verify_persistence=False, postgres=False, state_case="normal"):
             for sock in select.select([caller, backend], [], [], 0.1)[0]:
                 packet, address = sock.recvfrom(65535)
                 start, fields, body = parse(packet)
+                if expect_rejection is not None and sock is caller and start.startswith(f"SIP/2.0 {expect_rejection} "):
+                    assert backend_call is None, "rejected placement created a backend dialog"
+                    assert not select.select([backend], [], [], 0.25)[0], "rejected placement sent a delayed backend request"
+                    print("SIP placement rejected without creating a backend dialog", flush=True)
+                    return
                 if start.startswith("INVITE"):
+                    assert expect_rejection is None, "rejected placement created a SIP dialog"
                     sequences["caller" if sock is caller else "backend"] = int(fields["cseq"][0].split()[0])
                     if sock is backend:
                         if backend_call is None:
@@ -212,6 +240,16 @@ def run(verify_persistence=False, postgres=False, state_case="normal"):
             if recovered == acknowledged == {"caller", "backend"}:
                 assert caller_to is not None and backend_call != "source-proof"
                 print("UA API preserved both dialog Call-IDs through acknowledged re-INVITEs")
+                if placement_port is not None:
+                    until = time.monotonic() + 3
+                    while time.monotonic() < until:
+                        caller.sendto(options, destination)
+                        packet, _ = caller.recvfrom(65535)
+                        _, pending, _ = parse(packet)
+                        if pending.get("x-proof-placement-pending") == ["0"]:
+                            break
+                    else:
+                        raise AssertionError("placement notification did not complete")
                 if verify_persistence or postgres:
                     caller.sendto(options, destination)
                     packet, _ = caller.recvfrom(65535)
@@ -286,8 +324,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--verify-persistence", action="store_true")
     parser.add_argument("--postgres", action="store_true")
+    parser.add_argument("--placement-port", type=int)
+    parser.add_argument("--expect-rejection", type=int)
     parser.add_argument("--state-case", choices=("normal", "missing", "truncated", "version", "header-only", "flags", "expired"), default="normal")
     args = parser.parse_args()
     if args.state_case != "normal" and not args.postgres:
         parser.error("state injection requires the isolated PostgreSQL fixture")
-    run(args.verify_persistence, args.postgres, args.state_case)
+    run(args.verify_persistence, args.postgres, args.state_case, args.placement_port, args.expect_rejection)

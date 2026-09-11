@@ -1,5 +1,5 @@
 #### OpenSIPS 3.6.8 HA B2BUA policy
-# Installed by shell provisioning and rendered from the schema-v1 runtime secret.
+# Installed by shell provisioning and rendered from the schema-v2 runtime secret.
 
 #### Core
 log_level=2
@@ -28,11 +28,18 @@ loadmodule "tls_mgm.so"
 loadmodule "proto_tls.so"
 loadmodule "clusterer.so"
 loadmodule "dialog.so"
-loadmodule "load_balancer.so"
 loadmodule "uac_auth.so"
 loadmodule "b2b_entities.so"
 loadmodule "b2b_logic.so"
 loadmodule "rtpengine.so"
+loadmodule "rest_client.so"
+loadmodule "json.so"
+loadmodule "cfgutils.so"
+
+modparam("rest_client", "connection_timeout", 1)
+modparam("rest_client", "curl_timeout", 3)
+modparam("rest_client", "max_transfer_size", 4)
+modparam("rest_client", "max_async_transfers", 64)
 
 #### TLS: mutual TLS is required on the carrier TLS listener
 modparam("tls_mgm", "server_domain", "carrier-in")
@@ -57,16 +64,8 @@ modparam("dialog", "db_url", "@@DATABASE_URL@@")
 modparam("dialog", "db_mode", 1)
 modparam("dialog", "dialog_replication_cluster", @@CLUSTER_ID@@)
 
-#### Local admission counters only until gateway telemetry integration is qualified.
+#### Placement uses PostgreSQL reservations and direct gateway observations.
 # Never connect OpenSIPS to ESL: the fixed Sage gateway is its sole owner.
-modparam("load_balancer", "db_url", "@@DATABASE_URL@@")
-modparam("load_balancer", "fetch_freeswitch_stats", 0)
-modparam("load_balancer", "initial_freeswitch_load", 0)
-modparam("load_balancer", "probing_interval", 10)
-modparam("load_balancer", "probing_method", "OPTIONS")
-modparam("load_balancer", "probing_from", "sip:health@@@ADVERTISED_IP@@")
-modparam("load_balancer", "cluster_id", @@CLUSTER_ID@@)
-modparam("load_balancer", "cluster_sharing_tag", "state-owner")
 
 #### Replicated B2BUA state
 modparam("b2b_entities", "db_url", "@@DATABASE_URL@@")
@@ -112,6 +111,11 @@ route {
         exit;
     }
 
+    if (is_method("CANCEL")) {
+        if (t_check_trans()) t_relay();
+        exit;
+    }
+
     if (!is_method("INVITE") || has_totag()) {
         sl_send_reply(405, "Method Not Allowed");
         exit;
@@ -130,14 +134,13 @@ route {
     $avp(sage_header_name) = "X-SAGE-Source-IP";
     $avp(sage_header_body) = $si;
 
-    if (!lb_start(1, "channels", "rs", $var(freeswitch_attrs))) {
-        sl_send_reply(503, "No FreeSWITCH Capacity");
-        exit;
-    }
+    route(SAGE_SELECT);
+    exit;
+}
 
+route[SAGE_SETUP] {
     $avp(rtpengine_set) = 1;
     if (!rtpengine_offer("replace-origin replace-session-connection ICE=remove", $var(rtpengine_socket))) {
-        lb_reset();
         sl_send_reply(503, "Media Relay Unavailable");
         exit;
     }
@@ -149,6 +152,7 @@ route {
     $b2b_logic.ctx(media_socket) = $var(rtpengine_socket);
     $b2b_logic.ctx(source_ip) = $si;
     $b2b_logic.ctx(freeswitch_uri) = $du;
+    $b2b_logic.ctx(allocation_id) = $avp(sage_allocation);
 
     if ($socket_in(proto) == "tls") {
         $var(carrier_contact) = "sip:sbc@@@ADVERTISED_IP@@:5061;transport=tls";
@@ -166,6 +170,89 @@ route {
     exit;
 }
 
+# BEGIN POSTGRES PLACEMENT ROUTES
+route[SAGE_SELECT] {
+    if ($ml > 16384) {
+        sl_send_reply(513, "Message Too Large");
+        exit;
+    }
+    if (t_check_trans()) exit;
+    $var(identity) = $ci + "|" + $ft + "|" + $hdr(CSeq) + "|" + $si;
+    $avp(sage_allocation) = $(var(identity){s.sha256});
+    $var(fingerprint) = $ru + "|" + $fu + "|" + $tu + "|" + $hdr(Contact) + "|" + $rb;
+    $var(request_hash) = $(var(fingerprint){s.sha256});
+    $var(product) = "voice";
+    $var(cost) = "1";
+    if ($(hdr(Require){s.tolower}) =~ "(^|[, ])siprec([, ]|$)") {
+        $var(product) = "siprec";
+        $var(cost) = "3";
+    }
+    $var(body) = "{\"allocation_id\":\"" + $avp(sage_allocation) + "\",\"request_sha256\":\"" + $var(request_hash) +
+        "\",\"product\":\"" + $var(product) + "\",\"channels\":" + $var(cost) + ",\"ttl_ms\":30000}";
+    # Keep the global bound below rest_client's per-worker async limit: no blocking fallback.
+    get_static_lock("sage-placement-capacity");
+    if ($shv(placement_active) >= 32) {
+        release_static_lock("sage-placement-capacity");
+        sl_send_reply(503, "Placement Busy");
+        exit;
+    }
+    $shv(placement_active) = $shv(placement_active) + 1;
+    release_static_lock("sage-placement-capacity");
+    rest_append_hf("Authorization: Bearer @@PLACEMENT_TOKEN@@");
+    async(rest_post("http://127.0.0.1:8095/v1/reservations", $var(body), "application/json",
+                    $avp(placement_body), , $avp(placement_status)), SAGE_SELECTED);
+    exit;
+}
+
+route[SAGE_SELECTED] {
+    $var(placement_result) = $rc;
+    get_static_lock("sage-placement-capacity");
+    $shv(placement_active) = $shv(placement_active) - 1;
+    release_static_lock("sage-placement-capacity");
+    if (t_was_cancelled()) {
+        t_reply(487, "Request Terminated");
+        exit;
+    }
+    if ($var(placement_result) < 0 || $avp(placement_status) != 200) {
+        t_reply(503, "Placement Unavailable");
+        exit;
+    }
+    $json(placement) := $avp(placement_body);
+    # json exports booleans as strings; numeric comparison treats both nonempty values as true.
+    if ($json(placement/schema_version) != "1.0.0" ||
+        $json(placement/allocation_id) != $avp(sage_allocation) || $json(placement/fresh) != "true") {
+        # A replay must not create another SIP dialog after an uncertain first dispatch.
+        t_reply(503, "Placement Replay Requires Existing Transaction");
+        exit;
+    }
+    $du = $json(placement/destination);
+    route(SAGE_SETUP);
+    exit;
+}
+
+route[SAGE_NOTIFY] {
+    if (!($var(notify_id) =~ "^[a-f0-9]{64}$")) return;
+    get_static_lock("sage-placement-capacity");
+    if ($shv(placement_active) >= 32) {
+        release_static_lock("sage-placement-capacity");
+        # SQL expiry remains conservative if this best-effort notification cannot launch.
+        return;
+    }
+    $shv(placement_active) = $shv(placement_active) + 1;
+    release_static_lock("sage-placement-capacity");
+    $var(notify_url) = "http://127.0.0.1:8095/v1/reservations/" + $var(notify_id) + "/" + $var(notify_action);
+    rest_append_hf("Authorization: Bearer @@PLACEMENT_TOKEN@@");
+    launch(rest_post($var(notify_url), "{}", "application/json", $var(notify_body)), SAGE_NOTIFIED);
+}
+
+route[SAGE_NOTIFIED] {
+    get_static_lock("sage-placement-capacity");
+    $shv(placement_active) = $shv(placement_active) - 1;
+    release_static_lock("sage-placement-capacity");
+    exit;
+}
+# END POSTGRES PLACEMENT ROUTES
+
 #### Requests for established B2B sessions
 route[B2B_REQUEST] {
     $avp(rtpengine_set) = 1;
@@ -173,6 +260,9 @@ route[B2B_REQUEST] {
         $b2b_logic.ctx(media_callid) + " from-tag=" + $b2b_logic.ctx(media_fromtag);
 
     if (is_method("BYE") || is_method("CANCEL")) {
+        $var(notify_id) = $b2b_logic.ctx(allocation_id);
+        $var(notify_action) = "release";
+        route(SAGE_NOTIFY);
         rtpengine_delete($var(media_flags), $b2b_logic.ctx(media_socket));
         b2b_pass_request();
         exit;
@@ -196,6 +286,15 @@ route[B2B_REQUEST] {
 
 #### Replies for established B2B sessions
 route[B2B_REPLY] {
+    if ($rm == "INVITE" && $rs >= 200 && $rs < 300) {
+        $var(notify_id) = $b2b_logic.ctx(allocation_id);
+        $var(notify_action) = "confirm";
+        route(SAGE_NOTIFY);
+    } else if ($rm == "INVITE" && $rs >= 300) {
+        $var(notify_id) = $b2b_logic.ctx(allocation_id);
+        $var(notify_action) = "release";
+        route(SAGE_NOTIFY);
+    }
     $avp(rtpengine_set) = 1;
     $var(media_flags) = "replace-origin replace-session-connection ICE=remove call-id=" +
         $b2b_logic.ctx(media_callid) + " from-tag=" + $b2b_logic.ctx(media_fromtag);

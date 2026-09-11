@@ -15,7 +15,7 @@ SPEC.loader.exec_module(PACKAGER)
 
 
 class RuntimeSecretPackagerTests(unittest.TestCase):
-    def test_packages_schema_v1_bundle(self) -> None:
+    def test_packages_schema_v2_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             deployment = {
@@ -28,6 +28,7 @@ class RuntimeSecretPackagerTests(unittest.TestCase):
                 "carrier_udp_ips": ["192.0.2.10"],
                 "carrier_tls_ips": ["192.0.2.11"],
                 "rtpengine_nodes": [{"url": "udp:10.0.2.10:2223", "weight": 10}],
+                "placement": json.loads((MODULE_PATH.parents[1] / "config/deployment.json.example").read_text())["placement"],
             }
             paths = []
             for name, value in (
@@ -43,7 +44,7 @@ class RuntimeSecretPackagerTests(unittest.TestCase):
             encoded = PACKAGER.package_secret(*paths)
             payload = json.loads(encoded)
             self.assertLessEqual(len(encoded) + 1, PACKAGER.MAX_SECRET_BYTES)
-            self.assertEqual(payload["schema_version"], 1)
+            self.assertEqual(payload["schema_version"], 2)
             self.assertEqual(payload["deployment"], deployment)
             self.assertEqual(payload["tls"]["private_key"], "private key\n")
 
@@ -94,6 +95,7 @@ class RuntimeSecretPackagerTests(unittest.TestCase):
                 "carrier_udp_ips": ["192.0.2.10"],
                 "carrier_tls_ips": ["192.0.2.11"],
                 "rtpengine_nodes": [{"url": "udp:10.0.2.10:2223", "weight": 10}],
+                "placement": json.loads((MODULE_PATH.parents[1] / "config/deployment.json.example").read_text())["placement"],
             }
             deployment.write_text(json.dumps(invalid), encoding="utf-8")
             tls = root / "tls.pem"

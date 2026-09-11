@@ -20,5 +20,21 @@
       "url": "udp:10.0.2.11:2223",
       "weight": 10
     }
-  ]
+  ],
+  "placement": {
+    "namespace": "telephony",
+    "database_url": "postgres://placement:REPLACE_PERCENT_ENCODED_PASSWORD@db.internal.example:5432/opensips",
+    "service_token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "sage_origin": "https://sage.internal.example",
+    "sage_token": "replace-with-placement-reader-token-0001",
+    "load_secret_prefix": "arn:aws:secretsmanager:us-east-2:123456789012:secret:gateway-load/",
+    "inventory_networks": ["10.0.0.0/16"],
+    "inventory_ports": [443],
+    "gateway_networks": ["10.0.0.0/16"],
+    "gateway_ports": [443],
+    "sip_networks": ["10.0.0.0/16"],
+    "sip_ports": [5070, 5072],
+    "ca_bundle": null,
+    "database_ca_bundle": null
+  }
 }

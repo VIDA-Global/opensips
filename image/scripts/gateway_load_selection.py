@@ -11,7 +11,7 @@ import hashlib
 import json
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 
@@ -38,20 +38,21 @@ class Target:
 
 
 @dataclass(frozen=True)
-class _Sample:
+class LoadSample:
     incarnation: str
     telemetry: str
     sequence: int
     observed_at: str
     channels: int
     expires: float
+    sample_age_ms: int = 0
 
 
 @dataclass
 class _Node:
     target: Target
     expires: float
-    sample: _Sample | None = None
+    sample: LoadSample | None = None
     last_request: float = -math.inf
     load_valid: bool = False
 
@@ -83,6 +84,41 @@ def _text(value: object, maximum: int = 128) -> str:
     if not isinstance(value, str) or not 1 <= len(value) <= maximum:
         raise ValueError("invalid bounded text")
     return value
+
+
+def parse_load(target: Target, *, status: int, body: bytes, request_started: float,
+               now: float, incarnation_id: str | None = None) -> LoadSample | None:
+    """Validate detached gateway evidence for both the reference selector and SQL observer."""
+    if not math.isfinite(now) or not math.isfinite(request_started) or now < request_started:
+        raise ValueError("invalid monotonic time")
+    if status != 200 or len(body) > 4096 or now - request_started >= 2:
+        return None
+    try:
+        value = json.loads(body, object_pairs_hook=_unique_object)
+        if not isinstance(value, dict) or set(value) != {
+            "schema_version", "node_id", "incarnation_id", "gateway_generation_id",
+            "freeswitch_generation_id", "telemetry_generation_id", "observation_sequence",
+            "observed_at", "sample_age_ms", "physical_active_channels", "esl_ready", "valid",
+        }:
+            return None
+        if value["schema_version"] != "1.0.0" or value["valid"] is not True or value["esl_ready"] is not True:
+            return None
+        if (value["node_id"], value["gateway_generation_id"], value["freeswitch_generation_id"]) != target.identity:
+            return None
+        if incarnation_id is not None and value["incarnation_id"] != incarnation_id:
+            return None
+        age = _integer(value["sample_age_ms"], 0, 2999)
+        sample = LoadSample(
+            incarnation=_text(value["incarnation_id"]), telemetry=_text(value["telemetry_generation_id"]),
+            sequence=_integer(value["observation_sequence"], 1, 2**63-1),
+            observed_at=_text(value["observed_at"], 64), channels=_integer(value["physical_active_channels"], 0, 10000),
+            expires=request_started+(3000-age)/1000, sample_age_ms=age,
+        )
+        if datetime.fromisoformat(sample.observed_at).utcoffset() is None or sample.expires <= now:
+            return None
+        return sample
+    except (ValueError, TypeError, RecursionError):
+        return None
 
 
 class Selector:
@@ -126,46 +162,24 @@ class Selector:
         if node is None or request_started <= node.last_request:
             return False
         node.last_request, node.load_valid = request_started, False
-        if status != 200 or len(body) > 4096 or now - request_started >= 2 or node.expires <= now:
+        if node.expires <= now:
             return False
-        try:
-            value: object = json.loads(body, object_pairs_hook=_unique_object)
-            if not isinstance(value, dict) or set(value) != {
-                "schema_version", "node_id", "incarnation_id", "gateway_generation_id",
-                "freeswitch_generation_id", "telemetry_generation_id", "observation_sequence",
-                "observed_at", "sample_age_ms", "physical_active_channels", "esl_ready", "valid",
-            }:
+        sample = parse_load(node.target, status=status, body=body, request_started=request_started, now=now)
+        if sample is None:
+            return False
+        previous = node.sample
+        if previous is not None:
+            if previous.incarnation != sample.incarnation:
                 return False
-            if value["schema_version"] != "1.0.0" or value["valid"] is not True or value["esl_ready"] is not True:
-                return False
-            if (value["node_id"], value["gateway_generation_id"], value["freeswitch_generation_id"]) != node.target.identity:
-                return False
-            age = _integer(value["sample_age_ms"], 0, 2999)
-            sample = _Sample(
-                incarnation=_text(value["incarnation_id"]), telemetry=_text(value["telemetry_generation_id"]),
-                sequence=_integer(value["observation_sequence"], 1, 2**63 - 1),
-                observed_at=_text(value["observed_at"], 64),
-                channels=_integer(value["physical_active_channels"], 0, 10_000),
-                expires=request_started + (3000 - age) / 1000,
-            )
-            if datetime.fromisoformat(sample.observed_at).utcoffset() is None or sample.expires <= now:
-                return False
-            previous = node.sample
-            if previous is not None:
-                if previous.incarnation != sample.incarnation:
+            if previous.telemetry == sample.telemetry:
+                if sample.sequence < previous.sequence:
                     return False
-                if previous.telemetry == sample.telemetry:
-                    if sample.sequence < previous.sequence:
+                if sample.sequence == previous.sequence:
+                    if (sample.channels, sample.observed_at) != (previous.channels, previous.observed_at):
                         return False
-                    if sample.sequence == previous.sequence:
-                        if (sample.channels, sample.observed_at) != (previous.channels, previous.observed_at):
-                            return False
-                        sample = _Sample(sample.incarnation, sample.telemetry, sample.sequence,
-                                         sample.observed_at, sample.channels, min(sample.expires, previous.expires))
-            node.sample, node.load_valid = sample, sample.expires > now
-            return node.load_valid
-        except (ValueError, TypeError, RecursionError):
-            return False
+                    sample = replace(sample, expires=min(sample.expires, previous.expires))
+        node.sample, node.load_valid = sample, sample.expires > now
+        return node.load_valid
 
     def reserve(
         self, allocation_id: str, *, channels: int, deadline: float, now: float

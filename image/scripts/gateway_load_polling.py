@@ -82,7 +82,7 @@ def _sip_target(value: object) -> str:
     if not isinstance(value["address"], str):
         raise ValueError("SIP address must be explicit text")
     address = ip_address(value["address"])
-    if address.is_loopback or address.is_link_local or address.is_multicast or address.is_unspecified:
+    if address.is_loopback or address.is_link_local or address.is_multicast or address.is_unspecified or getattr(address, "ipv4_mapped", None) is not None:
         raise ValueError("invalid SIP target address")
     port = _integer(value["port"], 1, 65535)
     transport = value["transport"]
@@ -193,7 +193,7 @@ class DirectJsonClient:
         trust: ssl.SSLContext | None = None,
         concurrency: int = 8,
     ) -> None:
-        if not networks or any(network.prefixlen == 0 for network in networks):
+        if not networks or any(network.prefixlen == 0 or getattr(network.network_address, "ipv4_mapped", None) is not None for network in networks):
             raise ValueError("explicit observation networks are required")
         if not ports or any(type(port) is not int or not 1 <= port <= 65535 for port in ports):
             raise ValueError("explicit observation ports are required")
@@ -256,6 +256,7 @@ class DirectJsonClient:
                     ip = ip_address(address[0])
                     if (
                         ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified
+                        or getattr(ip, "ipv4_mapped", None) is not None
                         or not any(ip in network for network in self._networks)
                     ):
                         raise ObservationUnavailable("observation resolution outside its role")

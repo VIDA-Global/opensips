@@ -14,6 +14,9 @@ UA_BASELINE = {
     "ua_api.h": "47c199036c1ad783adaae435375098cde698f1b4a51b1693df55639766c41eb0",
 }
 UA_FILES = {*UA_BASELINE, "ua_storage.c"}
+PLACEMENT_FILES = {"placement/" + name + ".py" for name in (
+    "gateway_load_polling", "gateway_load_selection", "placement_store", "placement_observer", "placement_service", "placement_secret"
+)} | {"assets/" + name for name in ("placement_config.py", "placement-schema.sql", "opensips.cfg.template", "opensips-placement.service")}
 
 
 def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -26,7 +29,7 @@ def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
 
 def validate(value: object) -> dict[str, object]:
-    if not isinstance(value, dict) or set(value) != {"version", "commit", "sha256", "modules", "ua_sources"}:
+    if not isinstance(value, dict) or set(value) != {"version", "commit", "sha256", "modules", "ua_sources", "placement_sources"}:
         raise ValueError("invalid image input fields")
     for key, pattern in (("version", r"[0-9]+\.[0-9]+\.[0-9]+"),
                          ("commit", r"[a-f0-9]{40}"), ("sha256", r"[a-f0-9]{64}")):
@@ -44,6 +47,11 @@ def validate(value: object) -> dict[str, object]:
         for digest in sources.values()
     ):
         raise ValueError("invalid UA source provenance")
+    sources = value["placement_sources"]
+    if not isinstance(sources, dict) or set(sources) != PLACEMENT_FILES or any(
+        not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest) for digest in sources.values()
+    ):
+        raise ValueError("invalid placement source provenance")
     return value
 
 
@@ -69,6 +77,9 @@ def main() -> None:
     if operation == "check":
         if hashlib.sha256((root / "source.tar.gz").read_bytes()).hexdigest() != value["sha256"]:
             raise ValueError("source archive checksum mismatch")
+        for name, digest in value["placement_sources"].items():
+            if hashlib.sha256((root / name).read_bytes()).hexdigest() != digest:
+                raise ValueError("placement source checksum mismatch")
     elif operation == "modules":
         print("\n".join(value["modules"]))
     elif operation == "apply-ua":
@@ -82,7 +93,7 @@ def main() -> None:
         manifest = {"architecture": "arm64", "opensips_version": value["version"],
                     "opensips_source_commit": value["commit"],
                     "opensips_source_sha256": value["sha256"], "modules": value["modules"],
-                    "ua_sources": value["ua_sources"]}
+                    "ua_sources": value["ua_sources"], "placement_sources": value["placement_sources"]}
         (destination / "source-manifest.json").write_text(json.dumps(manifest, sort_keys=True) + "\n")
         (destination / "modules.txt").write_text("\n".join(sorted(value["modules"])) + "\n")
     else:
