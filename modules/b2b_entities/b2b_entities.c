@@ -526,6 +526,11 @@ static int mod_init(void)
 		return 0-1;
 	}
 
+	if (ua_storage_init() < 0) {
+		LM_ERR("Failed to restore UA recovery state\n");
+		return -1;
+	}
+
 	if (b2be_init_clustering() < 0) {
 		LM_ERR("Failed to init clustering support\n");
 		return -1;
@@ -553,7 +558,7 @@ void check_htable(b2b_table table, int hsize)
 		while(dlg)
 		{
 			dlg_next = dlg->next;
-			if((dlg->ua_flags&UA_FL_IS_UA_ENTITY) && dlg->b2b_cback == 0)
+			if(!(dlg->ua_flags&UA_FL_IS_UA_ENTITY) && dlg->b2b_cback == 0)
 			{
 				LM_ERR("Found entity callid=%.*s ftag=%.*s ttag=%.*s "
 						"not linked to any logic\n",
@@ -1057,4 +1062,3 @@ error:
 	free_mi_response(resp);
 	return NULL;
 }
-

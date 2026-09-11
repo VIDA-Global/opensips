@@ -36,6 +36,8 @@
 #ifndef _B2B_UA_API_
 #define _B2B_UA_API_
 
+#include <time.h>
+
 #define UA_FL_IS_UA_ENTITY     (1<<0)
 #define UA_FL_REPORT_ACK       (1<<1)
 #define UA_FL_REPORT_REPLIES   (1<<2)
@@ -63,6 +65,7 @@ struct ua_sess_init_params {
 struct ua_sess_t_list {
 	str b2b_key;
 	volatile unsigned int timeout;
+	time_t expires_at;
 	struct ua_sess_t_list *next;
 	struct ua_sess_t_list *prev;
 };
@@ -77,6 +80,7 @@ extern str adv_contact;
 extern int ua_default_timeout;
 
 int init_ua_sess_timer(void);
+int ua_storage_init(void);
 void destroy_ua_sess_timer(void);
 void ua_dlg_timer_routine(unsigned int ticks, void* param);
 struct ua_sess_t_list *insert_ua_sess_tl(str *b2b_key, unsigned int timeout);

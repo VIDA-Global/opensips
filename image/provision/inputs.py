@@ -8,6 +8,13 @@ from pathlib import Path
 import re
 import sys
 
+UA_BASELINE = {
+    "b2b_entities.c": "d2d6e9b036f1304d5fa867038fe40bbca7bae2504f370a387e0e23eac0d168bb",
+    "ua_api.c": "62719004d2a4e1b1d735d26140b712fcf11d7dd57c45b7489731b64a978a8beb",
+    "ua_api.h": "47c199036c1ad783adaae435375098cde698f1b4a51b1693df55639766c41eb0",
+}
+UA_FILES = {*UA_BASELINE, "ua_storage.c"}
+
 
 def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result: dict[str, object] = {}
@@ -19,7 +26,7 @@ def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
 
 def validate(value: object) -> dict[str, object]:
-    if not isinstance(value, dict) or set(value) != {"version", "commit", "sha256", "modules"}:
+    if not isinstance(value, dict) or set(value) != {"version", "commit", "sha256", "modules", "ua_sources"}:
         raise ValueError("invalid image input fields")
     for key, pattern in (("version", r"[0-9]+\.[0-9]+\.[0-9]+"),
                          ("commit", r"[a-f0-9]{40}"), ("sha256", r"[a-f0-9]{64}")):
@@ -31,7 +38,28 @@ def validate(value: object) -> dict[str, object]:
     if any(not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", name)
            for name in modules) or len(set(modules)) != len(modules):
         raise ValueError("invalid or duplicate module")
+    sources = value["ua_sources"]
+    if not isinstance(sources, dict) or set(sources) != UA_FILES or any(
+        not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest)
+        for digest in sources.values()
+    ):
+        raise ValueError("invalid UA source provenance")
     return value
+
+
+def apply_ua_sources(source: Path, overrides: Path, expected: dict[str, str]) -> None:
+    """Apply exactly the reviewed UA files only to their checksum-matched upstream baseline."""
+    if set(expected) != UA_FILES:
+        raise ValueError("invalid UA source set")
+    module = source / "modules/b2b_entities"
+    for name, digest in UA_BASELINE.items():
+        if hashlib.sha256((module / name).read_bytes()).hexdigest() != digest:
+            raise ValueError("UA upstream baseline changed; source review required")
+    contents = {name: (overrides / name).read_bytes() for name in expected}
+    if any(hashlib.sha256(data).hexdigest() != expected[name] for name, data in contents.items()):
+        raise ValueError("UA source checksum mismatch")
+    for name, data in contents.items():
+        (module / name).write_bytes(data)
 
 
 def main() -> None:
@@ -43,6 +71,8 @@ def main() -> None:
             raise ValueError("source archive checksum mismatch")
     elif operation == "modules":
         print("\n".join(value["modules"]))
+    elif operation == "apply-ua":
+        apply_ua_sources(Path("/usr/local/src/opensips"), root / "ua-overrides", value["ua_sources"])
     elif operation == "verify":
         directory = Path("/usr/lib/aarch64-linux-gnu/opensips/modules")
         if sorted(path.stem for path in directory.glob("*.so")) != sorted(value["modules"]):
@@ -51,7 +81,8 @@ def main() -> None:
         destination.mkdir(parents=True, exist_ok=True)
         manifest = {"architecture": "arm64", "opensips_version": value["version"],
                     "opensips_source_commit": value["commit"],
-                    "opensips_source_sha256": value["sha256"], "modules": value["modules"]}
+                    "opensips_source_sha256": value["sha256"], "modules": value["modules"],
+                    "ua_sources": value["ua_sources"]}
         (destination / "source-manifest.json").write_text(json.dumps(manifest, sort_keys=True) + "\n")
         (destination / "modules.txt").write_text("\n".join(sorted(value["modules"])) + "\n")
     else:

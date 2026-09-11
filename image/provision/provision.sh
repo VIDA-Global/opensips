@@ -37,6 +37,7 @@ case "$1" in
         rm -rf -- "$source_directory"
         install -d -m 0755 "$source_directory"
         tar -xzf "$root/source.tar.gz" --strip-components=1 -C "$source_directory"
+        python3 "$root/provision/inputs.py" apply-ua
         selected=$(python3 "$root/provision/inputs.py" modules)
         printf '%s\n' "$selected" | sort > "$root/selected-modules"
         for module in $selected; do test -d "$source_directory/modules/$module"; done

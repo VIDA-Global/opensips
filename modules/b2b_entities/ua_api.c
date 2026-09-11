@@ -308,6 +308,7 @@ struct ua_sess_t_list *insert_ua_sess_tl(str *b2b_key, unsigned int timeout)
 	memcpy(tl->b2b_key.s, b2b_key->s, b2b_key->len);
 
 	tl->timeout = get_ticks() + timeout;
+	tl->expires_at = time(NULL) + timeout;
 
 	lock_get(ua_dlg_timer->lock);
 

@@ -6,3 +6,5 @@
 !tests/integration/
 !tests/integration/ua-proof.cfg
 !tests/integration/ua-proof.py
+!provision/
+!provision/inputs.py

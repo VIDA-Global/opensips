@@ -1,6 +1,10 @@
 locals {
   architecture = "arm64"
   build_time   = formatdate("YYYYMMDDhhmmss", timestamp())
+  ua_sources = {
+    for name in ["b2b_entities.c", "ua_api.c", "ua_api.h", "ua_storage.c"] :
+    name => filesha256("${path.root}/../../modules/b2b_entities/${name}")
+  }
   common_tags = merge(var.additional_tags, {
     Application    = var.application_name
     Architecture   = local.architecture
@@ -78,7 +82,7 @@ build {
   sources = ["source.amazon-ebs.opensips_arm64"]
 
   provisioner "shell" {
-    inline = ["install -d -m 0700 /tmp/opensips-image-upload /tmp/opensips-image-upload/assets /tmp/opensips-image-upload/provision"]
+    inline = ["install -d -m 0700 /tmp/opensips-image-upload /tmp/opensips-image-upload/assets /tmp/opensips-image-upload/provision /tmp/opensips-image-upload/ua-overrides"]
   }
 
   provisioner "file" {
@@ -96,12 +100,29 @@ build {
   }
   provisioner "file" {
     content = jsonencode({
-      version = var.opensips_version
-      commit  = var.opensips_source_commit
-      sha256  = var.opensips_source_sha256
-      modules = var.opensips_modules
+      version    = var.opensips_version
+      commit     = var.opensips_source_commit
+      sha256     = var.opensips_source_sha256
+      modules    = var.opensips_modules
+      ua_sources = local.ua_sources
     })
     destination = "/tmp/opensips-image-upload/input.json"
+  }
+  provisioner "file" {
+    source      = "${path.root}/../../modules/b2b_entities/b2b_entities.c"
+    destination = "/tmp/opensips-image-upload/ua-overrides/b2b_entities.c"
+  }
+  provisioner "file" {
+    source      = "${path.root}/../../modules/b2b_entities/ua_api.c"
+    destination = "/tmp/opensips-image-upload/ua-overrides/ua_api.c"
+  }
+  provisioner "file" {
+    source      = "${path.root}/../../modules/b2b_entities/ua_api.h"
+    destination = "/tmp/opensips-image-upload/ua-overrides/ua_api.h"
+  }
+  provisioner "file" {
+    source      = "${path.root}/../../modules/b2b_entities/ua_storage.c"
+    destination = "/tmp/opensips-image-upload/ua-overrides/ua_storage.c"
   }
   provisioner "shell" {
     inline = [
@@ -128,6 +149,7 @@ build {
       opensips_source_sha256 = var.opensips_source_sha256
       opensips_version       = var.opensips_version
       source_ami_id          = var.source_ami_id
+      ua_source_sha256       = sha256(jsonencode(local.ua_sources))
     }
   }
 }

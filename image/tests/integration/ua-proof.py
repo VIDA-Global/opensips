@@ -9,6 +9,7 @@ import json
 import os
 import signal
 import sqlite3
+import struct
 from pathlib import Path
 
 
@@ -48,18 +49,86 @@ def reply(fields, port, body):
     ], body)
 
 
-def run(verify_persistence=False):
+def verify_restarted_updates(caller, backend, destination, caller_key, backend_key, sequences):
+    """Probe actual restored-leg control even when the UA listing is empty."""
+    for side, key in (("caller", caller_key), ("backend", backend_key)):
+        caller.sendto(encode("OPTIONS sip:recover@127.0.0.1:15060 SIP/2.0", [
+            f"Via: SIP/2.0/UDP 127.0.0.1:15062;branch=z9hG4bKrecover-{side}",
+            "From: <sip:caller@localhost>;tag=source-proof", "To: <sip:recover@localhost>",
+            f"Call-ID: recovery-trigger-{side}", "CSeq: 1 OPTIONS", "Max-Forwards: 10",
+            f"X-Proof-Update-Key: {key}",
+        ]), destination)
+    results, updates, acks = {}, {}, set()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        for sock in select.select([caller, backend], [], [], 0.1)[0]:
+            packet, address = sock.recvfrom(65535)
+            start, fields, body = parse(packet)
+            side = "caller" if sock is caller else "backend"
+            if start.startswith("INVITE"):
+                expected_call = "source-proof" if sock is caller else backend_key
+                assert fields["call-id"][0] == expected_call, "restored Call-ID changed"
+                assert int(fields["cseq"][0].split()[0]) > sequences[side], "restored CSeq regressed"
+                assert "m=audio 30006 " in body, "restored update carried wrong SDP"
+                updates[side] = fields["cseq"][0].split()[0]
+                sock.sendto(reply(fields, 15062 if sock is caller else 15064,
+                                  sdp(40000 if sock is caller else 40004, 3)), address)
+            elif start.startswith("ACK") and fields["cseq"][0].split()[0] == updates.get(side):
+                acks.add(side)
+            elif start.startswith("SIP/2.0 200") and "x-proof-update-result" in fields:
+                results[fields["call-id"][0]] = fields["x-proof-update-result"][0]
+        if acks == {"caller", "backend"} and len(results) == 2:
+            break
+    print(f"Post-restart control: API results={results}, updated legs={sorted(updates)}, "
+          f"acknowledged legs={sorted(acks)}", flush=True)
+    assert acks == {"caller", "backend"}, "restored legs did not complete acknowledged re-INVITEs"
+
+
+def postgres_sql(sql):
+    return subprocess.run(
+        ["psql", "-XAt", "-v", "ON_ERROR_STOP=1", "-h", "postgres", "-U", "ua_proof", "-d", "ua_proof"],
+        input=sql.encode(), env={**os.environ, "PGPASSWORD": "ua-proof-only", "PGCONNECT_TIMEOUT": "5"},
+        check=True, timeout=15, capture_output=True,
+    ).stdout.strip()
+
+
+def verify_expired_sessions(caller, backend):
+    terminated = set()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and len(terminated) < 2:
+        for sock in select.select([caller, backend], [], [], 0.1)[0]:
+            packet, address = sock.recvfrom(65535)
+            start, fields, _ = parse(packet)
+            if start.startswith("BYE"):
+                terminated.add("caller" if sock is caller else "backend")
+                sock.sendto(reply(fields, 15062 if sock is caller else 15064, ""), address)
+    assert terminated == {"caller", "backend"}, "expired session lifetime was renewed"
+    assert postgres_sql("SELECT count(*) FROM b2b_entities;") == b"0"
+    print("Expired PostgreSQL UA sessions terminated on both legs without lifetime renewal", flush=True)
+
+
+def run(verify_persistence=False, postgres=False, state_case="normal"):
     log = Path("/tmp/ua-proof.log")
     config = Path("/tests/ua-proof.cfg")
-    if verify_persistence:
-        with sqlite3.connect("/tmp/ua.sqlite") as database:
-            database.executescript("CREATE TABLE version(table_name TEXT, table_version INTEGER);")
-            database.executescript(Path("/source/scripts/sqlite/b2b-create.sql").read_text())
+    if verify_persistence or postgres:
+        if postgres:
+            # Fixed synthetic credentials, reachable only on the wrapper's internal network.
+            sql = ("CREATE TABLE version(table_name TEXT, table_version INTEGER);\n"
+                   + Path("/source/scripts/postgres/b2b-create.sql").read_text())
+            postgres_sql(sql)
+            database_url = "postgres://ua_proof:ua-proof-only@postgres/ua_proof"
+            driver = "db_postgres"
+        else:
+            with sqlite3.connect("/tmp/ua.sqlite") as database:
+                database.executescript("CREATE TABLE version(table_name TEXT, table_version INTEGER);")
+                database.executescript(Path("/source/scripts/sqlite/b2b-create.sql").read_text())
+            database_url = "sqlite:///tmp/ua.sqlite"
+            driver = "db_sqlite"
         contents = config.read_text().replace('modparam("b2b_entities", "db_mode", 0)',
             'modparam("b2b_entities", "db_mode", 1)\n'
-            'modparam("b2b_entities", "db_url", "sqlite:///tmp/ua.sqlite")')
+            f'modparam("b2b_entities", "db_url", "{database_url}")')
         contents = contents.replace('loadmodule "b2b_entities.so"',
-                                    'loadmodule "db_sqlite.so"\nloadmodule "b2b_entities.so"')
+                                    f'loadmodule "{driver}.so"\nloadmodule "b2b_entities.so"')
         config = Path("/tmp/ua-proof.cfg")
         config.write_text(contents)
     with log.open("wb") as stream:
@@ -101,12 +170,14 @@ def run(verify_persistence=False):
         recovered = set()
         expected_acks = {}
         acknowledged = set()
+        sequences = {}
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             for sock in select.select([caller, backend], [], [], 0.1)[0]:
                 packet, address = sock.recvfrom(65535)
                 start, fields, body = parse(packet)
                 if start.startswith("INVITE"):
+                    sequences["caller" if sock is caller else "backend"] = int(fields["cseq"][0].split()[0])
                     if sock is backend:
                         if backend_call is None:
                             backend_call = fields["call-id"][0]
@@ -140,19 +211,43 @@ def run(verify_persistence=False):
                     ]), destination)
             if recovered == acknowledged == {"caller", "backend"}:
                 assert caller_to is not None and backend_call != "source-proof"
-                print("Upstream UA API preserved both dialog Call-IDs through acknowledged re-INVITEs")
-                if verify_persistence:
+                print("UA API preserved both dialog Call-IDs through acknowledged re-INVITEs")
+                if verify_persistence or postgres:
                     caller.sendto(options, destination)
                     packet, _ = caller.recvfrom(65535)
                     _, before, _ = parse(packet)
                     before_count = len(json.loads(before["x-proof-ua"][0]))
                     assert before_count == 2
+                    if postgres:
+                        assert postgres_sql("SELECT count(*) FROM b2b_entities;") == b"2", "PostgreSQL did not persist both legs"
+                        print("PostgreSQL committed both SIP-leg records before crash", flush=True)
                     os.killpg(process.pid, signal.SIGKILL)
                     process.wait(timeout=5)
+                    if postgres and state_case != "normal":
+                        if state_case == "missing":
+                            postgres_sql("UPDATE b2b_entities SET storage = NULL;")
+                        elif state_case == "expired":
+                            expiry = str(int(time.time()) - 5).encode()
+                            payload = struct.pack("=iiH", 1, 55, len(expiry)) + expiry
+                            postgres_sql(f"UPDATE b2b_entities SET storage = decode('{payload.hex()}', 'hex');")
+                        else:
+                            payload = {"truncated": b"\x01", "version": struct.pack("=i", 2),
+                                       "header-only": struct.pack("=i", 1),
+                                       "flags": struct.pack("=ii", 1, 128)}[state_case]
+                            postgres_sql(f"UPDATE b2b_entities SET storage = decode('{payload.hex()}', 'hex');")
                     with log.open("ab") as stream:
                         process = subprocess.Popen(["opensips", "-F", "-f", str(config),
                             "-P", "/tmp/ua-proof.pid"], stdout=stream, stderr=stream,
-                            start_new_session=True)
+                             start_new_session=True)
+                    if state_case in {"missing", "truncated", "version", "header-only", "flags"}:
+                        assert process.wait(timeout=10) != 0, "invalid recovery state was accepted"
+                        assert "Failed to restore UA recovery state" in log.read_text()
+                        assert postgres_sql("SELECT count(*) FROM b2b_entities;") == b"2"
+                        print(f"Rejected {state_case} PostgreSQL UA recovery state at startup", flush=True)
+                        return
+                    if state_case == "expired":
+                        verify_expired_sessions(caller, backend)
+                        return
                     deadline = time.monotonic() + 10
                     while time.monotonic() < deadline:
                         caller.sendto(options, destination)
@@ -161,8 +256,15 @@ def run(verify_persistence=False):
                             _, after, _ = parse(packet)
                             restored = len(json.loads(after["x-proof-ua"][0]))
                             entities = len(json.loads(after["x-proof-entities"][0]))
-                            print(f"Database restore: entities={entities}, UA sessions={restored}")
+                            print(f"Database restore ({driver}): entities={entities}, UA sessions={restored}", flush=True)
+                            verify_restarted_updates(caller, backend, destination,
+                                                     caller_to.rsplit(";tag=", 1)[1], backend_call, sequences)
                             assert restored == before_count, "UA identity was not restored"
+                            caller.sendto(options, destination)
+                            packet, _ = caller.recvfrom(65535)
+                            _, events, _ = parse(packet)
+                            assert int(events["x-proof-answered"][0]) == 2, "restored UA reply events missing"
+                            print("Both restored UA reply events reached the script", flush=True)
                             break
                     else:
                         raise AssertionError("restart failed: " + log.read_text()[-4000:])
@@ -183,4 +285,9 @@ def run(verify_persistence=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--verify-persistence", action="store_true")
-    run(parser.parse_args().verify_persistence)
+    parser.add_argument("--postgres", action="store_true")
+    parser.add_argument("--state-case", choices=("normal", "missing", "truncated", "version", "header-only", "flags", "expired"), default="normal")
+    args = parser.parse_args()
+    if args.state_case != "normal" and not args.postgres:
+        parser.error("state injection requires the isolated PostgreSQL fixture")
+    run(args.verify_persistence, args.postgres, args.state_case)
