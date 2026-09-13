@@ -6,19 +6,24 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 COPY build/sources/opensips-3.6.8.tar.gz /source.tar.gz
 COPY --from=b2b_entities ua_storage.c ua_api.c ua_api.h b2b_entities.c /ua-overrides/
 COPY provision/inputs.py /ua-inputs/inputs.py
+COPY --from=b2b_logic records.c logic.c /b2b-header-overrides/
 RUN printf '%s\n' 'b3e1ab4d82dce763bbd51c99a1733f133465fda8fe2591f86aec9c3eefababf0  /source.tar.gz' | sha256sum -c - \
     && mkdir /source && tar -xzf /source.tar.gz --strip-components=1 -C /source \
     && PYTHONPATH=/ua-inputs python3 -c 'import hashlib; from pathlib import Path; from inputs import UA_FILES, apply_ua_sources; apply_ua_sources(Path("/source"), Path("/ua-overrides"), {name: hashlib.sha256((Path("/ua-overrides") / name).read_bytes()).hexdigest() for name in UA_FILES})' \
+    && PYTHONPATH=/ua-inputs python3 -c 'import hashlib; from pathlib import Path; from inputs import B2B_HEADER_BASELINE, apply_b2b_headers; p=Path("/b2b-header-overrides"); apply_b2b_headers(Path("/source"), p, {name: hashlib.sha256((p/name).read_bytes()).hexdigest() for name in B2B_HEADER_BASELINE})' \
     && cd /source && make Makefile.conf \
-    && make -j2 CC_EXTRA_OPTS=-Werror include_modules='b2b_entities mi_script cachedb_local sl tm signaling uac_auth sipmsgops db_sqlite db_postgres rest_client json cfgutils' all \
+    && make -j2 CC_EXTRA_OPTS=-Werror include_modules='b2b_entities mi_script cachedb_local sl tm signaling uac_auth sipmsgops db_sqlite db_postgres rest_client json cfgutils b2b_logic clusterer dialog maxfwd proto_bin rtpengine rr' all \
     && mkdir -p /modules \
-    && for module in b2b_entities mi_script cachedb_local sl tm signaling uac_auth sipmsgops db_sqlite db_postgres rest_client json cfgutils; do \
+    && for module in b2b_entities mi_script cachedb_local sl tm signaling uac_auth sipmsgops db_sqlite db_postgres rest_client json cfgutils b2b_logic clusterer dialog maxfwd proto_bin rtpengine rr; do \
         cp "modules/$module/$module.so" /modules/; done \
     && cp opensips /usr/local/bin/opensips
 COPY tests/integration/ua-proof.cfg tests/integration/ua-proof.py /tests/
+COPY tests/integration/b2b-headers-proof.py /tests/
+COPY tests/integration/native-edge-http-proof.py /tests/
 COPY scripts/gateway_load_polling.py tests/integration/load-https-proof.py /tests/
 COPY scripts/placement_store.py assets/placement-schema.sql tests/integration/placement-postgres-proof.py /tests/
 COPY scripts/placement_service.py scripts/placement_observer.py scripts/gateway_load_selection.py /tests/
 COPY assets/placement_config.py assets/opensips.cfg.template /tests/
 COPY scripts/placement_secret.py /tests/
+COPY assets/opensips-runtime-config.py tests/integration/native-edge-stack.py tests/integration/native-edge-health.py tests/integration/gateway-load-proxy.py /tests/
 CMD ["python3", "/tests/ua-proof.py"]

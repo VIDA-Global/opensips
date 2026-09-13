@@ -1,0 +1,60 @@
+# Test-only node-local demultiplexer. Production persistence/identity rollout is separate.
+log_level=2
+stderror_enabled=yes
+syslog_enabled=no
+socket=udp:@@CELL_IP@@:5070
+mpath="/modules/"
+loadmodule "proto_udp.so"
+loadmodule "signaling.so"
+loadmodule "sl.so"
+loadmodule "tm.so"
+loadmodule "sipmsgops.so"
+loadmodule "/source/modules/uac_auth/uac_auth.so"
+loadmodule "/source/modules/b2b_entities/b2b_entities.so"
+loadmodule "/source/modules/b2b_sdp_demux/b2b_sdp_demux.so"
+modparam("b2b_entities", "db_mode", 0)
+modparam("b2b_sdp_demux", "client_bye_mode", "terminate")
+route {
+    if ($ml > 32768 || !sipmsg_validate("hrft", $var(error))) {
+        sl_send_reply(400, "Invalid Request"); exit;
+    }
+    if (is_method("OPTIONS") && $si == "@@CELL_IP@@") {
+        $du = "sip:127.0.0.1:5074";
+        t_relay(); exit;
+    }
+    if ($si != "@@PROXY_IP@@") { sl_send_reply(403, "Forbidden"); exit; }
+    if (!is_method("INVITE") || has_totag()) { sl_send_reply(405, "No Method"); exit; }
+    if (!get_updated_body_part("application/sdp", $var(sdp))) {
+        sl_send_reply(488, "SDP Required"); exit;
+    }
+    $var(first) = $(var(sdp){sdp.line,m,0});
+    $var(second) = $(var(sdp){sdp.line,m,1});
+    if (!($var(first) =~ "^m=audio [1-9][0-9]* ") ||
+        $(var(sdp){sdp.line,m,2}) != NULL ||
+        ($var(second) != NULL && !($var(second) =~ "^m=audio [1-9][0-9]* "))) {
+        sl_send_reply(488, "One Or Two Audio Streams Required"); exit;
+    }
+    if (!($hdr(X-SAGE-Endpoint-Group) =~ "^[a-f0-9]{64}$") ||
+        $hdr(X-SAGE-Original-Body) == NULL ||
+        $(hdr(X-SAGE-Original-Body){s.len}) > 16000) {
+        sl_send_reply(400, "Invalid Source Context"); exit;
+    }
+    $var(count) = "1";
+    if ($var(second) != NULL) $var(count) = "2";
+    $var(common) = "X-SAGE-Endpoint-Version: 1\r\nX-SAGE-Endpoint-Group: " +
+        $hdr(X-SAGE-Endpoint-Group) + "\r\nX-SAGE-Endpoint-Count: " + $var(count) +
+        "\r\nX-SAGE-Original-Body: " + $hdr(X-SAGE-Original-Body) +
+        "\r\nX-SAGE-Source-IP: " + $hdr(X-SAGE-Source-IP) +
+        "\r\nX-SAGE-Edge-Call-ID: " + $hdr(X-SAGE-Edge-Call-ID) +
+        "\r\nX-SAGE-Edge-Request-URI: " + $hdr(X-SAGE-Edge-Request-URI) +
+        "\r\nX-SAGE-Edge-From: " + $hdr(X-SAGE-Edge-From) +
+        "\r\nX-SAGE-Edge-To: " + $hdr(X-SAGE-Edge-To) +
+        "\r\nX-SAGE-Edge-Port: " + $hdr(X-SAGE-Edge-Port) +
+        "\r\nX-SAGE-Edge-Transport: " + $hdr(X-SAGE-Edge-Transport) + "\r\n";
+    $avp(headers) = $var(common) + "X-SAGE-Endpoint-Index: 0\r\n";
+    if ($var(count) == "2") {
+        $avp(headers) = $var(common) + "X-SAGE-Endpoint-Index: 1\r\n";
+    }
+    b2b_sdp_demux("sip:record@127.0.0.1:5074", $avp(headers));
+    exit;
+}

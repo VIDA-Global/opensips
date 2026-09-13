@@ -14,6 +14,10 @@ UA_BASELINE = {
     "ua_api.h": "47c199036c1ad783adaae435375098cde698f1b4a51b1693df55639766c41eb0",
 }
 UA_FILES = {*UA_BASELINE, "ua_storage.c"}
+B2B_HEADER_BASELINE = {
+    "records.c": "c47067e511f68d804eeaf80a21e0fa2b92ca343c54a0a365a79dc44f4216abf2",
+    "logic.c": "b0e080e726c782fbd8336dc6036bf96d58cd01dde874598fa9cb9f26af94ba9e",
+}
 PLACEMENT_FILES = {"placement/" + name + ".py" for name in (
     "gateway_load_polling", "gateway_load_selection", "placement_store", "placement_observer", "placement_service", "placement_secret"
 )} | {"assets/" + name for name in ("placement_config.py", "placement-schema.sql", "opensips.cfg.template", "opensips-placement.service")}
@@ -29,7 +33,7 @@ def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
 
 def validate(value: object) -> dict[str, object]:
-    if not isinstance(value, dict) or set(value) != {"version", "commit", "sha256", "modules", "ua_sources", "placement_sources"}:
+    if not isinstance(value, dict) or set(value) != {"version", "commit", "sha256", "modules", "ua_sources", "placement_sources", "b2b_header_sources"}:
         raise ValueError("invalid image input fields")
     for key, pattern in (("version", r"[0-9]+\.[0-9]+\.[0-9]+"),
                          ("commit", r"[a-f0-9]{40}"), ("sha256", r"[a-f0-9]{64}")):
@@ -52,6 +56,11 @@ def validate(value: object) -> dict[str, object]:
         not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest) for digest in sources.values()
     ):
         raise ValueError("invalid placement source provenance")
+    sources = value["b2b_header_sources"]
+    if not isinstance(sources, dict) or set(sources) != set(B2B_HEADER_BASELINE) or any(
+        not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest) for digest in sources.values()
+    ):
+        raise ValueError("invalid B2BUA header source provenance")
     return value
 
 
@@ -70,6 +79,21 @@ def apply_ua_sources(source: Path, overrides: Path, expected: dict[str, str]) ->
         (module / name).write_bytes(data)
 
 
+def apply_b2b_headers(source: Path, overrides: Path, expected: dict[str, str]) -> None:
+    """Install the approved forwarding fix over exactly the reviewed upstream files."""
+    if set(expected) != set(B2B_HEADER_BASELINE):
+        raise ValueError("invalid B2BUA header source set")
+    module = source / "modules/b2b_logic"
+    for name, baseline in B2B_HEADER_BASELINE.items():
+        if hashlib.sha256((module / name).read_bytes()).hexdigest() != baseline:
+            raise ValueError("B2BUA header upstream baseline changed")
+    contents = {name: (overrides / name).read_bytes() for name in expected}
+    if any(hashlib.sha256(data).hexdigest() != expected[name] for name, data in contents.items()):
+        raise ValueError("B2BUA header source checksum mismatch")
+    for name, data in contents.items():
+        (module / name).write_bytes(data)
+
+
 def main() -> None:
     root = Path(__file__).resolve().parent.parent
     value = validate(json.loads((root / "input.json").read_text(), object_pairs_hook=unique_object))
@@ -84,6 +108,7 @@ def main() -> None:
         print("\n".join(value["modules"]))
     elif operation == "apply-ua":
         apply_ua_sources(Path("/usr/local/src/opensips"), root / "ua-overrides", value["ua_sources"])
+        apply_b2b_headers(Path("/usr/local/src/opensips"), root / "b2b-header-overrides", value["b2b_header_sources"])
     elif operation == "verify":
         directory = Path("/usr/lib/aarch64-linux-gnu/opensips/modules")
         if sorted(path.stem for path in directory.glob("*.so")) != sorted(value["modules"]):
@@ -93,7 +118,8 @@ def main() -> None:
         manifest = {"architecture": "arm64", "opensips_version": value["version"],
                     "opensips_source_commit": value["commit"],
                     "opensips_source_sha256": value["sha256"], "modules": value["modules"],
-                    "ua_sources": value["ua_sources"], "placement_sources": value["placement_sources"]}
+                    "ua_sources": value["ua_sources"], "placement_sources": value["placement_sources"],
+                    "b2b_header_sources": value["b2b_header_sources"]}
         (destination / "source-manifest.json").write_text(json.dumps(manifest, sort_keys=True) + "\n")
         (destination / "modules.txt").write_text("\n".join(sorted(value["modules"])) + "\n")
     else:

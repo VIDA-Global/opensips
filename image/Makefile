@@ -49,10 +49,36 @@ test:
 	python3 -m unittest discover -s tests -p 'test_*.py'
 
 proof-image: source
-	docker buildx build --platform linux/arm64 --build-context b2b_entities=../modules/b2b_entities --file tests/integration/ua-proof.Dockerfile --load --tag sage-opensips:ua-proof .
+	docker buildx build --platform linux/arm64 --build-context b2b_entities=../modules/b2b_entities --build-context b2b_logic=../modules/b2b_logic --file tests/integration/ua-proof.Dockerfile --load --tag sage-opensips:ua-proof .
+
+.PHONY: test-b2b-headers-proof
+test-b2b-headers-proof: proof-image
+	docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges --user 65532:65532 --read-only --tmpfs /tmp:rw,nosuid,nodev,size=64m sage-opensips:ua-proof python3 /tests/b2b-headers-proof.py
+	docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges --user 65532:65532 --read-only --tmpfs /tmp:rw,nosuid,nodev,size=64m sage-opensips:ua-proof python3 /tests/native-edge-http-proof.py
 
 test-ua-proof: proof-image
 	docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges --user 65532:65532 --read-only --tmpfs /tmp:rw,nosuid,nodev,size=64m sage-opensips:ua-proof
+
+.PHONY: stock-proxy-proof-image test-proxy-reanchor-proof test-proxy-takeover-proof test-demux-proof
+stock-proxy-proof-image: source
+	docker buildx build --platform linux/arm64 --file tests/integration/proxy-proof.Dockerfile --load --tag sage-opensips:stock-proxy-proof .
+
+test-proxy-reanchor-proof: stock-proxy-proof-image
+	sh tests/integration/run-proxy-reanchor-proof.sh
+
+test-proxy-takeover-proof: stock-proxy-proof-image
+	sh tests/integration/run-proxy-reanchor-proof.sh --takeover
+
+test-demux-proof: stock-proxy-proof-image
+	docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges --user 65532:65532 --read-only --tmpfs /tmp:rw,nosuid,nodev,size=64m sage-opensips:stock-proxy-proof python3 /tests/demux-proof.py
+
+.PHONY: test-demux-media-proof
+test-demux-media-proof: stock-proxy-proof-image
+	sh tests/integration/run-proxy-reanchor-proof.sh --demux-media
+
+.PHONY: test-demux-freeswitch-proof
+test-demux-freeswitch-proof: stock-proxy-proof-image
+	sh tests/integration/run-proxy-reanchor-proof.sh --demux-freeswitch
 
 test-load-https-proof: proof-image
 	sh tests/integration/run-load-https-proof.sh

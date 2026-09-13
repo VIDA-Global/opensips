@@ -69,7 +69,7 @@ class ImageContractTests(unittest.TestCase):
         config = (
             IMAGE_ROOT / "assets/opensips.cfg.template"
         ).read_text(encoding="utf-8")
-        self.assertIn('remove_hf_glob("X-SAGE-*")', config)
+        self.assertEqual(config.count('remove_hf_glob("[xX]-[sS][aA][gG][eE]-*")'), 2)
         self.assertIn('$avp(sage_header_name) = "X-SAGE-Source-IP"', config)
         self.assertIn("$avp(sage_header_body) = $si", config)
         self.assertNotIn("$hdr(X-SAGE-Source-IP)", config)

@@ -20,6 +20,46 @@ This project builds an immutable OpenSIPS AMI from canonical upstream source. It
 
 ## Safety Boundary
 
+### Stock-module qualification candidate
+
+The configuration-only candidate builds the verified upstream 3.6.8 archive using
+`tests/integration/proxy-proof.Dockerfile`, without local C sources or patch
+overlays. Sage's `make test-stock-proxy-e2e` exercises normal recording/control
+and native directory lifecycle through its dialog-aware proxy configuration.
+
+```sh
+make -C image test-proxy-reanchor-proof
+make -C image test-proxy-takeover-proof
+make -C image test-demux-proof
+```
+
+Both module gates passed on ARM64. They use isolated synthetic UDP SIP peers and
+two real RTPengine processes, verify bidirectional PCMA RTP, invoke the stock
+`rtp_relay_update_callid` operation and verify media through the replacement.
+The takeover variant first waits for replication readiness and a replicated
+dialog, kills the original OpenSIPS process group, explicitly promotes the backup
+sharing tag, then negotiates replacement media. Matching socket tags let the
+replicated dialog resolve the backup's local socket.
+
+These are module-mechanism proofs, not automatic partition-safe HA, PostgreSQL
+ownership arbitration, FreeSWITCH/SIPREC renegotiation, encrypted media, or AWS
+traffic-steering qualification. They require Docker/registry access, start three
+isolated containers, remove them on success, and stop/retain them on failure.
+Failure output includes bounded synthetic proxy logs before temporary filesystems
+are stopped. No host ports, AWS credentials or live customer data are used.
+The candidate has not yet replaced the existing Packer B2BUA deployment inputs.
+
+The stock `b2b_sdp_demux` wire proof also passes: a two-stream multipart SIPREC
+request produces two independent downstream SIP calls, each carrying exactly one
+active SDP audio stream, and their answers aggregate into the upstream response.
+This is a candidate for using ordinary media-bearing recording endpoints instead
+of an unbridged signaling-only FreeSWITCH parent. It does not yet prove Sage
+admission/call aggregation, actual FreeSWITCH recording, metadata updates, or
+demultiplexer persistence/takeover. The proxy recovery proofs above do not qualify
+the demultiplexer’s separate B2B ownership model.
+
+### Local and AWS commands
+
 These commands are AWS-free:
 
 ```bash
@@ -66,6 +106,21 @@ The build creates a temporary EC2 instance, key pair, encrypted volume, snapshot
 The current SSH design is transitional. Once Session Manager endpoints and instance policy exist, replace `ssh_interface = "private_ip"` with the reviewed Packer Session Manager communicator design.
 
 ## Local Build
+
+`make -C image test-b2b-headers-proof` builds and runs an isolated loopback
+HTTP/SIP regression for async B2BUA forwarding. The approved `records.c` and
+`logic.c` overrides apply pending header and SDP edits using private parsed
+storage rather than modifying borrowed TM buffers. The proof checks removal of
+`Require: siprec`, preservation of other required extensions, mixed-case spoofed
+header removal, trusted source context, and an SDP codec edit while preserving
+the multipart metadata, including reply-route SDP changes. Reply forwarding
+refreshes the pre-script notification context from the rendered response.
+Packer and the proof share baseline-checksummed override
+installation; `b2b_header_sources` records exact source hashes in image inputs
+and installed provenance. This is forwarding evidence, not media qualification.
+Runtime schema 2 also requires `voice_ingress_namespace`, matching the Sage
+VoiceRoute ingress namespace. Sage's `make test-native-edge-e2e` provides the
+cross-service UDP fixture and records its current media evidence in `TESTS.md`.
 
 The [UA renegotiation proof](docs/ua-feasibility.md) documents a real,
 configuration-only two-leg SIP test and the remaining HA/media recovery gates.

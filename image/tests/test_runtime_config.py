@@ -24,6 +24,7 @@ def valid_secret() -> dict:
         "schema_version": 2,
         "deployment": {
             "node_id": 1,
+            "voice_ingress_namespace": "production",
             "cluster_id": 10,
             "private_ip": "10.0.1.10",
             "advertised_ip": "198.51.100.10",

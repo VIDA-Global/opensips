@@ -20,6 +20,7 @@ class RuntimeSecretPackagerTests(unittest.TestCase):
             root = Path(directory)
             deployment = {
                 "node_id": 1,
+                "voice_ingress_namespace": "production",
                 "cluster_id": 10,
                 "private_ip": "10.0.1.10",
                 "advertised_ip": "198.51.100.10",
@@ -87,6 +88,7 @@ class RuntimeSecretPackagerTests(unittest.TestCase):
             deployment = root / "deployment.json"
             invalid = {
                 "node_id": True,
+                "voice_ingress_namespace": "production",
                 "cluster_id": 10,
                 "private_ip": "10.0.1.10",
                 "advertised_ip": "198.51.100.10",

@@ -1925,13 +1925,59 @@ error:
 
 int b2b_handle_reply(struct sip_msg *msg, unsigned int flags)
 {
+	struct sip_msg rendered;
+	str body = {NULL, 0}, headers = {NULL, 0}, auth;
+	str *old_body, *old_headers, *custom = NULL;
+	unsigned int length;
+	char *buffer;
+	int result = -1;
+
 	if (!(cur_route_ctx.flags & B2BL_RT_RPL_CTX)) {
 		LM_ERR("The 'b2b_handle_reply' function can only be used from the "
 			"b2b_logic dedicated reply routes\n");
 		return -1;
 	}
 
-	return _b2b_handle_reply(msg, NULL, NULL, NULL, flags) ? -1 : 1;
+	if (!msg->add_rm && !msg->body_lumps && !msg->body)
+		return _b2b_handle_reply(msg, NULL, NULL, NULL, flags) ? -1 : 1;
+
+	/* Notification context was captured before the script ran. Forward its
+	 * edited body and headers, retaining explicitly enabled auth challenges. */
+	buffer = build_res_buf_from_sip_res(msg, &length, msg->rcv.bind_address, 0);
+	if (!buffer)
+		return -1;
+	memset(&rendered, 0, sizeof(rendered));
+	rendered.buf = buffer;
+	rendered.len = length;
+	if (parse_msg(buffer, length, &rendered) != 0 ||
+		parse_headers(&rendered, HDR_EOH_F, 0) != 0 ||
+		get_body(&rendered, &body) != 0)
+		goto done;
+	if (b2bl_htable[cur_route_ctx.hash_index].flags & B2BL_FLAG_TRANSPARENT_AUTH) {
+		if (rendered.first_line.u.reply.statuscode == 401 && rendered.www_authenticate) {
+			auth.s = rendered.www_authenticate->name.s;
+			auth.len = rendered.www_authenticate->len;
+			custom = &auth;
+		} else if (rendered.first_line.u.reply.statuscode == 407 && rendered.proxy_authenticate) {
+			auth.s = rendered.proxy_authenticate->name.s;
+			auth.len = rendered.proxy_authenticate->len;
+			custom = &auth;
+		}
+	}
+	if (b2b_extra_headers(&rendered, NULL, custom, &headers) < 0)
+		goto done;
+	old_body = cur_route_ctx.body;
+	old_headers = cur_route_ctx.extra_headers;
+	cur_route_ctx.body = &body;
+	cur_route_ctx.extra_headers = &headers;
+	result = _b2b_handle_reply(msg, NULL, NULL, NULL, flags) ? -1 : 1;
+	cur_route_ctx.body = old_body;
+	cur_route_ctx.extra_headers = old_headers;
+done:
+	if (headers.s) pkg_free(headers.s);
+	free_sip_msg(&rendered);
+	pkg_free(buffer);
+	return result;
 }
 
 int b2b_pass_request(struct sip_msg *msg)
@@ -3226,7 +3272,7 @@ error:
 }
 
 
-int b2bl_script_init_request(struct sip_msg *msg, str *id, struct b2b_params *init_params,
+static int b2bl_script_init_rendered(struct sip_msg *msg, str *id, struct b2b_params *init_params,
 	void *req_route_ref, void *reply_route_ref)
 {
 	str* key;
@@ -3273,6 +3319,51 @@ int b2bl_script_init_request(struct sip_msg *msg, str *id, struct b2b_params *in
 	if(key) ret = 1;
 
 	return ret;
+}
+
+int b2bl_script_init_request(struct sip_msg *msg, str *id,
+	struct b2b_params *init_params, void *req_route_ref, void *reply_route_ref)
+{
+	struct sip_msg rendered;
+	unsigned int length;
+	char *buffer;
+	int result = -1;
+
+	if (!(msg->msg_flags & FL_TM_FAKE_REQ) ||
+		(!msg->add_rm && !msg->body_lumps && !msg->body))
+		return b2bl_script_init_rendered(msg, id, init_params,
+			req_route_ref, reply_route_ref);
+
+	/* Async requests borrow TM storage. Render header AND body edits into an
+	 * owned request before creating either leg; never overwrite the TM buffer. */
+	buffer = build_req_buf_from_sip_req(msg, &length, msg->rcv.bind_address,
+		msg->rcv.proto, NULL, MSG_TRANS_NOVIA_FLAG);
+	if (!buffer)
+		return -1;
+	memset(&rendered, 0, sizeof(rendered));
+	rendered.buf = buffer;
+	rendered.len = length;
+	rendered.id = msg->id;
+	rendered.rcv = msg->rcv;
+	rendered.flags = msg->flags;
+	rendered.msg_flags = msg->msg_flags;
+	rendered.hash_index = msg->hash_index;
+	rendered.force_send_socket = msg->force_send_socket;
+	if ((msg->dst_uri.len && pkg_str_dup(&rendered.dst_uri, &msg->dst_uri) < 0) ||
+		(msg->path_vec.len && pkg_str_dup(&rendered.path_vec, &msg->path_vec) < 0) ||
+		(msg->set_global_address.len && pkg_str_dup(&rendered.set_global_address,
+			&msg->set_global_address) < 0) ||
+		(msg->set_global_port.len && pkg_str_dup(&rendered.set_global_port,
+			&msg->set_global_port) < 0))
+		goto done;
+	if (parse_msg(buffer, length, &rendered) == 0 &&
+		parse_headers(&rendered, HDR_EOH_F, 0) == 0)
+		result = b2bl_script_init_rendered(&rendered, id, init_params,
+			req_route_ref, reply_route_ref);
+done:
+	free_sip_msg(&rendered);
+	pkg_free(buffer);
+	return result;
 }
 
 static struct b2bl_new_entity *tmp_client_new(struct sip_msg *msg, str *id,

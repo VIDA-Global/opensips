@@ -1,6 +1,10 @@
 locals {
   architecture = "arm64"
   build_time   = formatdate("YYYYMMDDhhmmss", timestamp())
+  b2b_header_sources = {
+    for name in ["records.c", "logic.c"] :
+    name => filesha256("${path.root}/../../modules/b2b_logic/${name}")
+  }
   ua_sources = {
     for name in ["b2b_entities.c", "ua_api.c", "ua_api.h", "ua_storage.c"] :
     name => filesha256("${path.root}/../../modules/b2b_entities/${name}")
@@ -89,7 +93,7 @@ build {
   sources = ["source.amazon-ebs.opensips_arm64"]
 
   provisioner "shell" {
-    inline = ["install -d -m 0700 /tmp/opensips-image-upload /tmp/opensips-image-upload/assets /tmp/opensips-image-upload/provision /tmp/opensips-image-upload/ua-overrides /tmp/opensips-image-upload/placement"]
+    inline = ["install -d -m 0700 /tmp/opensips-image-upload /tmp/opensips-image-upload/assets /tmp/opensips-image-upload/provision /tmp/opensips-image-upload/ua-overrides /tmp/opensips-image-upload/placement /tmp/opensips-image-upload/b2b-header-overrides"]
   }
 
   provisioner "file" {
@@ -131,12 +135,13 @@ build {
   }
   provisioner "file" {
     content = jsonencode({
-      version           = var.opensips_version
-      commit            = var.opensips_source_commit
-      sha256            = var.opensips_source_sha256
-      modules           = var.opensips_modules
-      ua_sources        = local.ua_sources
-      placement_sources = local.placement_sources
+      version            = var.opensips_version
+      commit             = var.opensips_source_commit
+      sha256             = var.opensips_source_sha256
+      modules            = var.opensips_modules
+      ua_sources         = local.ua_sources
+      placement_sources  = local.placement_sources
+      b2b_header_sources = local.b2b_header_sources
     })
     destination = "/tmp/opensips-image-upload/input.json"
   }
@@ -155,6 +160,14 @@ build {
   provisioner "file" {
     source      = "${path.root}/../../modules/b2b_entities/ua_storage.c"
     destination = "/tmp/opensips-image-upload/ua-overrides/ua_storage.c"
+  }
+  provisioner "file" {
+    source      = "${path.root}/../../modules/b2b_logic/records.c"
+    destination = "/tmp/opensips-image-upload/b2b-header-overrides/records.c"
+  }
+  provisioner "file" {
+    source      = "${path.root}/../../modules/b2b_logic/logic.c"
+    destination = "/tmp/opensips-image-upload/b2b-header-overrides/logic.c"
   }
   provisioner "shell" {
     inline = [
@@ -176,13 +189,14 @@ build {
     output     = "${path.root}/../build/packer-manifest.json"
     strip_path = true
     custom_data = {
-      architecture            = local.architecture
-      opensips_source_commit  = var.opensips_source_commit
-      opensips_source_sha256  = var.opensips_source_sha256
-      opensips_version        = var.opensips_version
-      source_ami_id           = var.source_ami_id
-      ua_source_sha256        = sha256(jsonencode(local.ua_sources))
-      placement_source_sha256 = sha256(jsonencode(local.placement_sources))
+      architecture             = local.architecture
+      opensips_source_commit   = var.opensips_source_commit
+      opensips_source_sha256   = var.opensips_source_sha256
+      opensips_version         = var.opensips_version
+      source_ami_id            = var.source_ami_id
+      ua_source_sha256         = sha256(jsonencode(local.ua_sources))
+      b2b_header_source_sha256 = sha256(jsonencode(local.b2b_header_sources))
+      placement_source_sha256  = sha256(jsonencode(local.placement_sources))
     }
   }
 }

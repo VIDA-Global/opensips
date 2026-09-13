@@ -28,6 +28,7 @@ DEPLOYMENT_FIELDS = {
     "carrier_tls_ips",
     "rtpengine_nodes",
     "placement",
+    "voice_ingress_namespace",
 }
 
 
@@ -68,6 +69,9 @@ def validate_deployment(deployment: dict[str, object]) -> None:
     if set(deployment) != DEPLOYMENT_FIELDS:
         raise ValueError("deployment configuration must contain exactly the schema-v2 fields")
     validate_placement(deployment["placement"])
+    namespace = deployment["voice_ingress_namespace"]
+    if not isinstance(namespace, str) or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", namespace):
+        raise ValueError("invalid Voice ingress namespace")
     for field in ("node_id", "cluster_id"):
         value = deployment[field]
         if type(value) is not int or not 1 <= value <= 2147483647:

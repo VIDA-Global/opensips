@@ -1,0 +1,147 @@
+#### Stock-source, UDP-only dialog-aware proxy qualification fixture.
+log_level=2
+stderror_enabled=no
+syslog_enabled=yes
+udp_workers=4
+mpath="/usr/lib/aarch64-linux-gnu/opensips/modules/"
+socket=udp:@@PRIVATE_IP@@:5060 as @@ADVERTISED_IP@@:5060
+socket=bin:@@PRIVATE_IP@@:5566
+loadmodule "proto_udp.so"
+loadmodule "sl.so"
+loadmodule "tm.so"
+loadmodule "signaling.so"
+loadmodule "maxfwd.so"
+loadmodule "sipmsgops.so"
+loadmodule "rr.so"
+loadmodule "db_postgres.so"
+loadmodule "proto_bin.so"
+loadmodule "clusterer.so"
+loadmodule "dialog.so"
+loadmodule "rtpengine.so"
+loadmodule "rtp_relay.so"
+loadmodule "rest_client.so"
+loadmodule "json.so"
+loadmodule "cfgutils.so"
+loadmodule "mi_fifo.so"
+loadmodule "mi_datagram.so"
+loadmodule "tracer.so"
+# Synthetic qualification traffic only; never installed as production tracing policy.
+modparam("tracer", "trace_id", "[proof]uri=file:/tmp/stock-proxy-sip.log")
+modparam("mi_datagram", "socket_name", "/tmp/native-proxy-mi.sock")
+modparam("mi_fifo", "fifo_name", "/tmp/proxy-mi.fifo")
+modparam("mi_fifo", "fifo_mode", 0600)
+modparam("clusterer", "db_url", "@@DATABASE_URL@@")
+modparam("clusterer", "my_node_id", @@NODE_ID@@)
+modparam("clusterer", "sharing_tag", "state-owner/@@CLUSTER_ID@@=@@STATE_OWNER@@")
+modparam("dialog", "db_url", "@@DATABASE_URL@@")
+modparam("dialog", "db_mode", 1)
+modparam("dialog", "dialog_replication_cluster", @@CLUSTER_ID@@)
+modparam("rtpengine", "rtpengine_sock", "1 == @@RTPENGINE_NODES@@")
+modparam("rtpengine", "rtpengine_tout", 1)
+modparam("rtpengine", "rtpengine_retr", 2)
+modparam("rest_client", "connection_timeout", 1)
+modparam("rest_client", "curl_timeout", 3)
+modparam("rest_client", "max_transfer_size", 4)
+modparam("rest_client", "max_async_transfers", 64)
+
+route {
+    if ($ml > 16384) { sl_send_reply(513, "Message Too Large"); exit; }
+    force_rport();
+    if (!sipmsg_validate("hrft", $var(sip_error))) {
+        sl_send_reply(400, "Bad Request"); exit;
+    }
+    if (!mf_process_maxfwd_header(16)) { sl_send_reply(483, "Too Many Hops"); exit; }
+    if (has_totag()) {
+        if (!loose_route()) { sl_send_reply(404, "Unknown Dialog"); exit; }
+        if (!validate_dialog()) { sl_send_reply(403, "Invalid Dialog"); exit; }
+        remove_hf_glob("[xX]-[sS][aA][gG][eE]-*");
+        if (is_method("BYE")) {
+            $var(notify_id) = $dlg_val(allocation_id);
+            $var(notify_action) = "release";
+            route(SAGE_NOTIFY);
+        }
+        if (!t_relay()) sl_reply_error();
+        exit;
+    }
+    # This fixture deliberately does not enable TLS; retain the renderer's scope token.
+    # TLS carrier scope: @@CARRIER_TLS_REJECT@@
+    if ($socket_in(proto) != "udp" || @@CARRIER_UDP_REJECT@@) {
+        sl_send_reply(403, "Forbidden"); exit;
+    }
+    if (is_method("OPTIONS")) { sl_send_reply(200, "OK"); exit; }
+    if (is_method("CANCEL")) { if (t_check_trans()) t_relay(); exit; }
+    if (!is_method("INVITE")) { sl_send_reply(405, "Method Not Allowed"); exit; }
+    if (!has_body("application/sdp")) { sl_send_reply(488, "SDP Offer Required"); exit; }
+    remove_hf_glob("[xX]-[sS][aA][gG][eE]-*");
+    append_hf("X-SAGE-Source-IP: $si\r\n");
+    append_hf("X-SAGE-Edge-Call-ID: $ci\r\n");
+    append_hf("X-SAGE-Edge-To: $tu\r\n");
+    append_hf("X-SAGE-Edge-Port: $sp\r\n");
+    append_hf("X-SAGE-Edge-Transport: $socket_in(proto)\r\n");
+    $avp(sage_product) = "voice";
+    if (list_hdr_has_option("Require", "siprec") || list_hdr_has_option("Supported", "siprec")) {
+        $avp(sage_product) = "siprec";
+        list_hdr_remove_option("Require", "siprec");
+    } else {
+        if (has_body("multipart/mixed")) {
+            append_to_reply("Require: siprec\r\n"); sl_send_reply(421, "Extension Required"); exit;
+        }
+        append_hf("X-SAGE-Voice-Ingress-Namespace: @@VOICE_INGRESS_NAMESPACE@@\r\n");
+        append_hf("X-SAGE-Voice-Requested-User: $rU\r\n");
+        append_hf("X-SAGE-Voice-Requested-Domain: $rd\r\n");
+    }
+    route(SAGE_SELECT);
+    exit;
+}
+
+route[SAGE_SETUP] {
+    if ($env(SAGE_STOCK_DEMUX_TEST) == "1" && $avp(sage_product) == "siprec") {
+        if ($(rb{s.len}) > 12000) { t_reply(513, "SIPREC Body Too Large"); exit; }
+        $var(source_request_uri) = $rU + "@" + $rd;
+        $var(source_request_port) = $(ru{uri.port});
+        if ($var(source_request_port) != NULL && $var(source_request_port) != "") {
+            $var(source_request_uri) = $var(source_request_uri) + ":" + $var(source_request_port);
+        }
+        append_hf("X-SAGE-Edge-Request-URI: $var(source_request_uri)\r\n");
+        $var(source_from_uri) = $(fu{uri.user}) + "@" + $(fu{uri.host});
+        $var(source_from_port) = $(fu{uri.port});
+        if ($var(source_from_port) != NULL && $var(source_from_port) != "") {
+            $var(source_from_uri) = $var(source_from_uri) + ":" + $var(source_from_port);
+        }
+        append_hf("X-SAGE-Edge-From: $var(source_from_uri)\r\n");
+        append_hf("X-SAGE-Original-Body: $(rb{s.b64encode})\r\n");
+        append_hf("X-SAGE-Endpoint-Group: $avp(sage_allocation)\r\n");
+    }
+    record_route();
+    if (!create_dialog("B")) { t_reply(500, "Dialog Unavailable"); exit; }
+    trace("proof", "d", "sip");
+    set_dlg_sharing_tag("state-owner");
+    $dlg_val(allocation_id) = $avp(sage_allocation);
+    $rtp_relay = "replace-origin replace-session-connection ICE=remove";
+    $rtp_relay_peer = "replace-origin replace-session-connection ICE=remove";
+    $rtp_relay(iface) = "external";
+    $rtp_relay_peer(iface) = "internal";
+    if (!rtp_relay_engage("rtpengine", 1)) { t_reply(503, "Media Relay Unavailable"); exit; }
+    t_on_reply("PROXY_REPLY");
+    force_send_socket("udp:@@PRIVATE_IP@@:5060");
+    if (!t_relay()) sl_reply_error();
+    exit;
+}
+
+onreply_route[PROXY_REPLY] {
+    if ($rs >= 200 && $rs < 300) {
+        $var(notify_id) = $avp(sage_allocation);
+        $var(notify_action) = "confirm";
+        route(SAGE_NOTIFY);
+    } else if ($rs >= 300) {
+        $var(notify_id) = $avp(sage_allocation);
+        $var(notify_action) = "release";
+        route(SAGE_NOTIFY);
+    }
+}
+
+@@PLACEMENT_ROUTES@@
+
+local_route {
+    trace("proof", "t", "sip");
+}

@@ -33,6 +33,7 @@
 #include "../../parser/parse_uri.h"
 #include "../../pt.h"
 #include "../../context.h"
+#include "../../msg_translator.h"
 #include "../presence/hash.h"
 #include "../presence/utils_func.h"
 #include "records.h"
@@ -849,7 +850,7 @@ void destroy_b2bl_htable(void)
  *	Min-SE
 */
 #define HDR_BUF_SIZE  256
-int b2b_extra_headers(struct sip_msg* msg, str* b2bl_key, str* custom_hdrs,
+static int b2b_collect_extra_headers(struct sip_msg* msg, str* b2bl_key, str* custom_hdrs,
 															str* extra_headers)
 {
 	char* p;
@@ -979,6 +980,40 @@ int b2b_extra_headers(struct sip_msg* msg, str* b2bl_key, str* custom_hdrs,
 	extra_headers->len = p - extra_headers->s;
 
 	return 0;
+}
+
+int b2b_extra_headers(struct sip_msg *msg, str *b2bl_key, str *custom_hdrs,
+		str *extra_headers)
+{
+	struct sip_msg rendered;
+	unsigned int length;
+	char *buffer;
+	int result = -1;
+
+	if (!msg->add_rm && !msg->body_lumps)
+		return b2b_collect_extra_headers(msg, b2bl_key, custom_hdrs, extra_headers);
+
+	/* Async TM requests borrow shared parsed state. Do not rewrite their buffer
+	 * or free their headers: collect from a privately rendered message instead.
+	 * Use the normal translator so option edits and multipart framing agree. */
+	if (msg->first_line.type == SIP_REQUEST)
+		buffer = build_req_buf_from_sip_req(msg, &length,
+			msg->rcv.bind_address, msg->rcv.proto, NULL, MSG_TRANS_NOVIA_FLAG);
+	else
+		buffer = build_res_buf_from_sip_res(msg, &length, msg->rcv.bind_address, 0);
+	if (!buffer)
+		return -1;
+
+	memset(&rendered, 0, sizeof(rendered));
+	rendered.buf = buffer;
+	rendered.len = length;
+	if (parse_msg(buffer, length, &rendered) == 0 &&
+		parse_headers(&rendered, HDR_EOH_F, 0) == 0)
+		result = b2b_collect_extra_headers(&rendered, b2bl_key, custom_hdrs,
+			extra_headers);
+	free_sip_msg(&rendered);
+	pkg_free(buffer);
+	return result;
 }
 
 /* The function will return with the lock aquired if successful */

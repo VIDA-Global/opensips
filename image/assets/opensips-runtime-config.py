@@ -38,6 +38,7 @@ REQUIRED_PLACEHOLDERS = {
     "@@CARRIER_TLS_REJECT@@",
     "@@RTPENGINE_NODES@@",
     "@@PLACEMENT_TOKEN@@",
+    "@@VOICE_INGRESS_NAMESPACE@@",
 }
 SECRET_ARN_RE = re.compile(
     r"^arn:(?P<partition>aws(?:-us-gov|-cn)?):secretsmanager:"
@@ -187,6 +188,7 @@ def render_config(deployment: Any, template: str) -> str:
         "carrier_tls_ips",
         "rtpengine_nodes",
         "placement",
+        "voice_ingress_namespace",
     }
     if not isinstance(deployment, dict) or set(deployment) != required:
         raise ConfigurationError("deployment must contain exactly the supported schema-v2 fields")
@@ -194,6 +196,9 @@ def render_config(deployment: Any, template: str) -> str:
         placement = validate_placement(deployment["placement"])
     except ValueError:
         raise ConfigurationError("invalid placement configuration") from None
+    voice_namespace = deployment["voice_ingress_namespace"]
+    if not isinstance(voice_namespace, str) or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", voice_namespace):
+        raise ConfigurationError("invalid Voice ingress namespace")
     missing_placeholders = REQUIRED_PLACEHOLDERS - {item for item in REQUIRED_PLACEHOLDERS if item in template}
     if missing_placeholders:
         raise ConfigurationError("OpenSIPS policy template is missing required placeholders")
@@ -218,6 +223,7 @@ def render_config(deployment: Any, template: str) -> str:
         "@@CARRIER_TLS_REJECT@@": "(" + " && ".join(f"$si != {ip}" for ip in tls_ips) + ")",
         "@@RTPENGINE_NODES@@": validate_rtpengine_nodes(deployment["rtpengine_nodes"]),
         "@@PLACEMENT_TOKEN@@": placement["service_token"],
+        "@@VOICE_INGRESS_NAMESPACE@@": voice_namespace,
     }
     rendered = template
     for placeholder, value in replacements.items():

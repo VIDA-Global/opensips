@@ -92,6 +92,11 @@ modparam("rtpengine", "ping_enabled", 1)
 
 #### Initial carrier request route
 route {
+    force_rport();
+    if (!sipmsg_validate("hrft", $var(sip_error))) {
+        sl_send_reply(400, "Bad Request");
+        exit;
+    }
     if (!mf_process_maxfwd_header(16)) {
         sl_send_reply(483, "Too Many Hops");
         exit;
@@ -130,9 +135,34 @@ route {
 
     # Strip spoofed values case-insensitively, then construct the sole trusted
     # value from OpenSIPS's network source address pseudo-variable.
-    remove_hf_glob("X-SAGE-*");
+    remove_hf_glob("[xX]-[sS][aA][gG][eE]-*");
     $avp(sage_header_name) = "X-SAGE-Source-IP";
     $avp(sage_header_body) = $si;
+    $avp(sage_header_name) = "X-SAGE-Edge-Call-ID";
+    $avp(sage_header_body) = $ci;
+    $avp(sage_header_name) = "X-SAGE-Edge-To";
+    $avp(sage_header_body) = $tu;
+    $avp(sage_header_name) = "X-SAGE-Edge-Port";
+    $avp(sage_header_body) = $sp;
+    $avp(sage_header_name) = "X-SAGE-Edge-Transport";
+    $avp(sage_header_body) = $socket_in(proto);
+    $avp(sage_product) = "voice";
+    if (list_hdr_has_option("Require", "siprec") || list_hdr_has_option("Supported", "siprec")) {
+        $avp(sage_product) = "siprec";
+        list_hdr_remove_option("Require", "siprec");
+    } else {
+        if (has_body("multipart/mixed")) {
+            append_to_reply("Require: siprec\r\n");
+            sl_send_reply(421, "Extension Required");
+            exit;
+        }
+        $avp(sage_header_name) = "X-SAGE-Voice-Ingress-Namespace";
+        $avp(sage_header_body) = "@@VOICE_INGRESS_NAMESPACE@@";
+        $avp(sage_header_name) = "X-SAGE-Voice-Requested-User";
+        $avp(sage_header_body) = $rU;
+        $avp(sage_header_name) = "X-SAGE-Voice-Requested-Domain";
+        $avp(sage_header_body) = $rd;
+    }
 
     route(SAGE_SELECT);
     exit;
@@ -140,7 +170,7 @@ route {
 
 route[SAGE_SETUP] {
     $avp(rtpengine_set) = 1;
-    if (!rtpengine_offer("replace-origin replace-session-connection ICE=remove", $var(rtpengine_socket))) {
+    if (!rtpengine_offer("in-iface=external out-iface=internal replace-origin replace-session-connection ICE=remove", $var(rtpengine_socket))) {
         sl_send_reply(503, "Media Relay Unavailable");
         exit;
     }
@@ -161,7 +191,12 @@ route[SAGE_SETUP] {
     }
     b2b_server_new("carrier", $var(carrier_contact));
     force_send_socket("udp:@@PRIVATE_IP@@:5060");
-    b2b_client_new("freeswitch", $ru, $du, "SAGE SBC", "sip:sbc@@@ADVERTISED_IP@@:5060",
+    $var(source_name) = $fn;
+    if ($var(source_name) == NULL) $var(source_name) = "";
+    # Argument five is the advertised Contact, not the From URI. The module
+    # preserves the source From URI; backend dialog requests return to this edge.
+    $var(backend_contact) = "sip:sbc@@@PRIVATE_IP@@:5060";
+    b2b_client_new("freeswitch", $ru, $du, $var(source_name), $var(backend_contact),
         $avp(sage_header_name), $avp(sage_header_body));
     # The setup and maximum-duration timers are replicated. Monitoring must
     # tolerate duplicate idempotent teardown messages from surviving nodes and
@@ -183,7 +218,7 @@ route[SAGE_SELECT] {
     $var(request_hash) = $(var(fingerprint){s.sha256});
     $var(product) = "voice";
     $var(cost) = "1";
-    if ($(hdr(Require){s.tolower}) =~ "(^|[, ])siprec([, ]|$)") {
+    if ($avp(sage_product) == "siprec" || list_hdr_has_option("Require", "siprec") || list_hdr_has_option("Supported", "siprec")) {
         $var(product) = "siprec";
         $var(cost) = "3";
     }
@@ -255,8 +290,10 @@ route[SAGE_NOTIFIED] {
 
 #### Requests for established B2B sessions
 route[B2B_REQUEST] {
+    # Sequential caller headers must not replace the original trusted ingress context.
+    remove_hf_glob("[xX]-[sS][aA][gG][eE]-*");
     $avp(rtpengine_set) = 1;
-    $var(media_flags) = "replace-origin replace-session-connection ICE=remove call-id=" +
+    $var(media_flags) = "in-iface=external out-iface=internal replace-origin replace-session-connection ICE=remove call-id=" +
         $b2b_logic.ctx(media_callid) + " from-tag=" + $b2b_logic.ctx(media_fromtag);
 
     if (is_method("BYE") || is_method("CANCEL")) {
@@ -296,7 +333,7 @@ route[B2B_REPLY] {
         route(SAGE_NOTIFY);
     }
     $avp(rtpengine_set) = 1;
-    $var(media_flags) = "replace-origin replace-session-connection ICE=remove call-id=" +
+    $var(media_flags) = "in-iface=internal out-iface=external replace-origin replace-session-connection ICE=remove call-id=" +
         $b2b_logic.ctx(media_callid) + " from-tag=" + $b2b_logic.ctx(media_fromtag);
 
     if ($rm == "INVITE" && $rs >= 180 && $rs < 300 && has_body("application/sdp")) {
