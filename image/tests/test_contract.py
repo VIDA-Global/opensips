@@ -86,6 +86,8 @@ class ImageContractTests(unittest.TestCase):
 
     def test_iam_templates_render_as_json(self) -> None:
         replacements = {
+            "${AWS_PARTITION}": "aws",
+            "${OWNERSHIP_NAMESPACE}": "telephony",
             "${AWS_ACCOUNT_ID}": "123456789012",
             "${AWS_REGION}": "us-east-2",
             "${GITHUB_ORG}": "example",
@@ -106,6 +108,25 @@ class ImageContractTests(unittest.TestCase):
             with self.subTest(template=template_path.name):
                 self.assertNotIn("${", rendered)
                 json.loads(rendered)
+
+    def test_native_ownership_requires_guard_and_independent_scoped_iam(self) -> None:
+        unit = (IMAGE_ROOT / "assets/opensips.service").read_text()
+        self.assertLess(unit.index("ownership_guard.py"), unit.index("ExecStartPre=/usr/sbin/opensips"))
+        self.assertIn("TimeoutStartSec=15s", unit)
+        policy = json.loads((IMAGE_ROOT / "iam/ownership-controller-policy.json.tmpl").read_text())
+        termination = next(item for item in policy["Statement"] if item["Action"] == "ec2:TerminateInstances")
+        self.assertIn("${AWS_ACCOUNT_ID}", termination["Resource"])
+        self.assertIn("${AWS_REGION}", termination["Resource"])
+        self.assertEqual(termination["Condition"]["StringEquals"], {
+            "aws:RequestedRegion": "${AWS_REGION}",
+            "ec2:ResourceTag/OpenSIPSOwnershipNamespace": "${OWNERSHIP_NAMESPACE}",
+        })
+        runtime = json.loads((IMAGE_ROOT / "iam/runtime-instance-policy.json.tmpl").read_text())
+        for statement in runtime["Statement"]:
+            actions = statement["Action"]
+            if isinstance(actions, str):
+                actions = [actions]
+            self.assertTrue(set(actions).isdisjoint({"ec2:TerminateInstances", "ec2:*", "*"}))
 
 
 if __name__ == "__main__":

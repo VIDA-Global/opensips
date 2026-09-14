@@ -146,20 +146,43 @@ async def main():
     config = config.replace('mpath="/usr/lib/aarch64-linux-gnu/opensips/modules/"', 'mpath="/modules/"')
     config = config.replace("stderror_enabled=no", "stderror_enabled=yes").replace("syslog_enabled=yes", "syslog_enabled=no")
     config += f"\nsocket=udp:{edge_ip}:5060 as {media_ip}:5060\n"
+    if os.environ.get("NATIVE_CONTROL_IP"):
+        control_ip = str(ipaddress.IPv4Address(os.environ["NATIVE_CONTROL_IP"]))
+        # Bind backend SIP to the actual control interface. A media-bound source
+        # crossing Docker bridges may otherwise be masqueraded as a shared router.
+        config += f"\nsocket=udp:{control_ip}:5060 as {media_ip}:5060\n"
+        config = config.replace(
+            "route[SAGE_SETUP] {",
+            f'route[SAGE_SETUP] {{\n    force_send_socket("udp:{control_ip}:5060");',
+            1,
+        ).replace(f'force_send_socket("udp:{media_ip}:5060")',
+                  f'force_send_socket("udp:{control_ip}:5060")')
+        if os.environ.get("SAGE_STOCK_PROXY_TEST") == "1":
+            marker = '        remove_hf_glob("[xX]-[sS][aA][gG][eE]-*");'
+            config = config.replace(
+                marker, marker + '\n        if (is_direction("downstream")) '
+                + f'force_send_socket("udp:{control_ip}:5060");', 1,
+            )
     path = Path("/tmp/native-edge.cfg")
     path.write_text(config)
     path.chmod(0o600)
     stop = asyncio.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         asyncio.get_running_loop().add_signal_handler(sig, stop.set)
-    with Path("/tmp/native-edge.log").open("wb") as log:
+    log_path = Path("/tmp/native-edge.log")
+    if log_path.exists():
+        log_path.replace("/tmp/native-edge.previous.log")
+    with log_path.open("wb") as log:
         process = await asyncio.create_subprocess_exec("opensips", "-F", "-f", str(path), stdout=log, stderr=log)
     stopped = asyncio.create_task(stop.wait())
     exited = asyncio.create_task(process.wait())
     try:
         done, _ = await asyncio.wait((stopped, exited, observer_task), return_when=asyncio.FIRST_COMPLETED)
         if stopped not in done:
-            raise RuntimeError("native edge stopped; private evidence retained in /tmp/native-edge.log")
+            if observer_task in done:
+                error = observer_task.exception()
+                raise RuntimeError("native edge observer stopped: " + type(error).__name__)
+            raise RuntimeError(f"native SIP process stopped with status {process.returncode}; private log retained")
     finally:
         if process.returncode is None:
             process.terminate()

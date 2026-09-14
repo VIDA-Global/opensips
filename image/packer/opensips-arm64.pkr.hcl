@@ -10,10 +10,10 @@ locals {
     name => filesha256("${path.root}/../../modules/b2b_entities/${name}")
   }
   placement_sources = merge({
-    for name in ["gateway_load_polling", "gateway_load_selection", "placement_store", "placement_observer", "placement_service", "placement_secret"] :
+    for name in ["gateway_load_polling", "gateway_load_selection", "placement_store", "placement_observer", "placement_service", "placement_secret", "ownership", "ownership_guard", "ownership_fencing", "ownership_controller"] :
     "placement/${name}.py" => filesha256("${path.root}/../scripts/${name}.py")
     }, {
-    for name in ["placement_config.py", "placement-schema.sql", "opensips.cfg.template", "opensips-placement.service"] :
+    for name in ["placement_config.py", "placement-schema.sql", "ownership-schema.sql", "opensips.cfg.template", "opensips-placement.service", "opensips.service"] :
     "assets/${name}" => filesha256("${path.root}/../assets/${name}")
   })
   common_tags = merge(var.additional_tags, {
@@ -132,6 +132,22 @@ build {
   provisioner "file" {
     source      = "${path.root}/../scripts/placement_secret.py"
     destination = "/tmp/opensips-image-upload/placement/placement_secret.py"
+  }
+  provisioner "file" {
+    source      = "${path.root}/../scripts/ownership.py"
+    destination = "/tmp/opensips-image-upload/placement/ownership.py"
+  }
+  provisioner "file" {
+    source      = "${path.root}/../scripts/ownership_guard.py"
+    destination = "/tmp/opensips-image-upload/placement/ownership_guard.py"
+  }
+  provisioner "file" {
+    source      = "${path.root}/../scripts/ownership_fencing.py"
+    destination = "/tmp/opensips-image-upload/placement/ownership_fencing.py"
+  }
+  provisioner "file" {
+    source      = "${path.root}/../scripts/ownership_controller.py"
+    destination = "/tmp/opensips-image-upload/placement/ownership_controller.py"
   }
   provisioner "file" {
     content = jsonencode({

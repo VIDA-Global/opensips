@@ -23,6 +23,7 @@ help:
 	  '  make test-ua-postgres-proof        Probe UA crash recovery against isolated PostgreSQL' \
 	  '  make test-load-https-proof         Probe bounded direct HTTPS on an isolated network' \
 	  '  make test-placement-postgres-proof Probe distributed SQL reservations on an isolated network' \
+	  '  make test-ownership-proof          Probe partition, independent fencing and SQL ownership' \
 	  '  make source-test MODE=<mode>      Run Linux source build, unit, or fuzz tests' \
 	  '  make package-secret DEPLOYMENT=<file> CERT=<file> KEY=<file> CA=<file>' \
 	  '  make build VARS_FILE=<file>        Build the source-region AMI (uses AWS)' \
@@ -68,6 +69,10 @@ test-proxy-reanchor-proof: stock-proxy-proof-image
 
 test-proxy-takeover-proof: stock-proxy-proof-image
 	sh tests/integration/run-proxy-reanchor-proof.sh --takeover
+
+.PHONY: test-ownership-proof
+test-ownership-proof: stock-proxy-proof-image
+	sh tests/integration/run-ownership-proof.sh
 
 test-demux-proof: stock-proxy-proof-image
 	docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges --user 65532:65532 --read-only --tmpfs /tmp:rw,nosuid,nodev,size=64m sage-opensips:stock-proxy-proof python3 /tests/demux-proof.py

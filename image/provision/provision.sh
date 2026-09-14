@@ -61,11 +61,12 @@ case "$1" in
             /usr/local/sbin/opensips-runtime-config
         install -o root -g root -m 0644 "$root/assets/placement_config.py" /usr/local/sbin/placement_config.py
         install -d -o root -g root -m 0755 /usr/local/lib/opensips-placement /usr/share/opensips-ami
-        for script in gateway_load_polling gateway_load_selection placement_store placement_observer placement_service placement_secret; do
+        for script in gateway_load_polling gateway_load_selection placement_store placement_observer placement_service placement_secret ownership ownership_guard ownership_fencing ownership_controller; do
             install -o root -g root -m 0644 "$root/placement/$script.py" "/usr/local/lib/opensips-placement/$script.py"
         done
         install -o root -g root -m 0644 "$root/assets/placement_config.py" /usr/local/lib/opensips-placement/placement_config.py
         install -o root -g root -m 0644 "$root/assets/placement-schema.sql" /usr/share/opensips-ami/placement-schema.sql
+        install -o root -g root -m 0644 "$root/assets/ownership-schema.sql" /usr/share/opensips-ami/ownership-schema.sql
         install -o root -g opensips -m 0640 "$root/assets/opensips.cfg.template" \
             /etc/opensips/opensips.cfg.template
         install -o root -g root -m 0644 "$root/assets/opensips.service" \

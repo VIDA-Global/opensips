@@ -4,7 +4,12 @@
 
 The image contains `proto_bin`, `clusterer`, `dialog`, `b2b_entities`, and `b2b_logic`. The installed policy fixes listeners, database modes, and B2B routes. Schema-v2 values provide node identity, advertised/private addresses, database URLs and placement-service configuration; PostgreSQL `clusterer` rows provide private BIN peer topology. PostgreSQL is authoritative for durable state. Replication is a recovery mechanism, not an alternative authority. Frontend steering, exclusive SIP ownership, network isolation and endpoint behavior still require qualification.
 
-The intended replicated-dialog baseline, still requiring end-to-end qualification, is:
+The native process startup policy is now [fence-before-promote ownership](ownership.md):
+one active process per namespace, cold standbys, SQL epochs and independent physical
+fencing. It prevents a partition from granting a second executing owner. Existing
+replicated-dialog module experiments remain separate recovery evidence.
+
+The intended dialog-restoration baseline, still requiring end-to-end qualification, is:
 
 > A surviving OpenSIPS node can provide new-call service and best-effort routing for a replicated confirmed dialog when its original RTPengine and SIP endpoints remain reachable.
 
@@ -12,7 +17,11 @@ It does not preserve an early INVITE transaction, retransmission cache, process-
 
 The installed `/etc/opensips/opensips.cfg.template` policy implements this baseline only. It probes and balances new allocations across multiple relays and records the selected control socket in replicated B2B context. It rejects a failed in-dialog renegotiation without retaining a fallback allocation; a failed initial answer tears down its allocation and current B2B leg. OpenSIPS 3.6 configuration cannot atomically terminate both existing `b2b_logic` legs, so monitoring must use the `b2b_terminate_call` MI command for deterministic full-call teardown. The default policy does not implement the automatic recovery state machine below.
 
-Replicated tuples retain their setup and lifetime timers on each node. Expiry can therefore produce duplicate BYE or CANCEL requests, which endpoints must handle idempotently. Tuple-expiry processing does not run the script's RTPEngine cleanup route, so monitoring must identify and delete orphaned media sessions after a setup or maximum-duration timeout.
+The native policy does not run simultaneous warm standby processes with replicated
+timers. In the separate replicated-module experiments, tuple expiry can produce
+duplicate BYE/CANCEL requests; those experiments must not be deployed as an ownership
+substitute. Tuple-expiry processing does not run the script's RTPEngine cleanup
+route, so monitoring must still identify orphaned media sessions after timeout.
 
 ## Why Detection Is Not Recovery
 
@@ -59,7 +68,10 @@ Any pending state
 The owner must:
 
 1. Confirm failure using bounded control probes and avoid reacting to one transient timeout.
-2. Fence concurrent recovery for the same B2B session using PostgreSQL ownership and a qualified partition/egress-fencing policy.
+2. Use the PostgreSQL ownership epoch and independent physical fence before changing
+   the executing node. The local ownership proof covers this execution boundary;
+   in-flight transaction/effect uncertainty and dialog/media restoration still
+   require the remaining recovery stages and live deployment qualification.
 3. Reserve a replacement relay without deleting the original session.
 4. Generate an offer acceptable to the first leg and persist the pending CSeq and operation identity.
 5. Apply the accepted SDP to the second leg and wait for its final answer.

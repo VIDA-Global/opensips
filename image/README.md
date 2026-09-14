@@ -20,6 +20,20 @@ This project builds an immutable OpenSIPS AMI from canonical upstream source. It
 
 ## Safety Boundary
 
+### Native ownership
+
+The native systemd unit now gates OpenSIPS startup on PostgreSQL ownership of the
+local IMDSv2 instance ID. Standbys remain cold. An independent controller must
+physically fence the prior instance before granting a new epoch; the EC2 adapter
+requires observed termination, not a stop request or expired heartbeat. The local
+SQL-partition/process-fencing proof passes. See [native ownership](docs/ownership.md)
+for provisioning, permissions, destructive effects, replay behavior and the exact
+remaining AWS qualification boundary.
+
+```sh
+make -C image test-ownership-proof
+```
+
 ### Stock-module qualification candidate
 
 The configuration-only candidate builds the verified upstream 3.6.8 archive using
@@ -102,6 +116,10 @@ The build creates a temporary EC2 instance, key pair, encrypted volume, snapshot
 - Private routing and TCP/22 access from the runner to the build and validation subnets.
 - Controlled package egress through NAT, proxies, or an internal Ubuntu mirror.
 - Existing VPC, private subnets, security groups, instance profiles, KMS keys, and Secrets Manager test configuration.
+- A provisioned ownership namespace, runtime read grants and an independent
+  lifecycle controller for native startup/transfer. The AWS validation environment
+  must activate its launched instance through that controller; a database or
+  process-only check is not a substitute for this gate.
 
 The current SSH design is transitional. Once Session Manager endpoints and instance policy exist, replace `ssh_interface = "private_ip"` with the reviewed Packer Session Manager communicator design.
 
@@ -237,7 +255,7 @@ InstanceMetadataTags=enabled
 | `deployment.cluster_id` | integer | Positive cluster ID shared by both nodes |
 | `deployment.private_ip` | string | Canonical IPv4 address used by UDP, TLS, BIN, and outbound UDP sockets |
 | `deployment.advertised_ip` | string | Canonical frontend IPv4 address advertised in SIP signaling |
-| `deployment.state_owner` | string | Exactly `active` or `backup`; deploy one of each |
+| `deployment.state_owner` | string | Exactly `active`; SQL ownership gates execution and standbys stay cold |
 | `deployment.database_url` | string | `postgres://` URL, at most 1024 characters, with no whitespace, quotes, backslashes, or NUL; percent-encode credentials |
 | `deployment.carrier_udp_ips` | array | Non-empty, unique canonical IPv4 source allowlist for UDP |
 | `deployment.carrier_tls_ips` | array | Non-empty, unique canonical IPv4 source allowlist for mutual TLS |

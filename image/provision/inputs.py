@@ -19,8 +19,9 @@ B2B_HEADER_BASELINE = {
     "logic.c": "b0e080e726c782fbd8336dc6036bf96d58cd01dde874598fa9cb9f26af94ba9e",
 }
 PLACEMENT_FILES = {"placement/" + name + ".py" for name in (
-    "gateway_load_polling", "gateway_load_selection", "placement_store", "placement_observer", "placement_service", "placement_secret"
-)} | {"assets/" + name for name in ("placement_config.py", "placement-schema.sql", "opensips.cfg.template", "opensips-placement.service")}
+    "gateway_load_polling", "gateway_load_selection", "placement_store", "placement_observer", "placement_service", "placement_secret",
+    "ownership", "ownership_guard", "ownership_fencing", "ownership_controller"
+)} | {"assets/" + name for name in ("placement_config.py", "placement-schema.sql", "ownership-schema.sql", "opensips.cfg.template", "opensips-placement.service", "opensips.service")}
 
 
 def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:

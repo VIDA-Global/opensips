@@ -204,8 +204,8 @@ def render_config(deployment: Any, template: str) -> str:
         raise ConfigurationError("OpenSIPS policy template is missing required placeholders")
 
     state_owner = deployment["state_owner"]
-    if not isinstance(state_owner, str) or state_owner not in {"active", "backup"}:
-        raise ConfigurationError("deployment.state_owner must be active or backup")
+    if state_owner != "active":
+        raise ConfigurationError("deployment.state_owner must be active; SQL fencing controls process startup")
     udp_ips = validate_ip_list(deployment["carrier_udp_ips"], "deployment.carrier_udp_ips")
     tls_ips = validate_ip_list(deployment["carrier_tls_ips"], "deployment.carrier_tls_ips")
     replacements = {

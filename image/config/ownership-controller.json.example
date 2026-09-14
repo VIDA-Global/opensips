@@ -1,0 +1,11 @@
+{
+  "namespace": "telephony",
+  "database_url": "postgresql://ownership_controller:REPLACE_PERCENT_ENCODED_PASSWORD@db.internal.example/opensips",
+  "database_ca_bundle": "/etc/telephony/postgres-ca.pem",
+  "region": "us-east-2",
+  "account": "123456789012",
+  "instances": [
+    "i-00000000000000001",
+    "i-00000000000000002"
+  ]
+}
